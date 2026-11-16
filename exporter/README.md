@@ -21,6 +21,11 @@ ft_exporter check
 ft_exporter export --out <Exports folder> [--force] [--only] <path>...
 ```
 
+Animations (poses for the Poses tab) are exported as `.psa` + `.json` when they are listed themselves (no
+sibling animations). Most need `CUE4Parse-Natives.dll`, which FModel unpacks to `%TEMP%\.net\FModel\…` when
+it runs; the helper loads it from there (`check` reports `natives`). Additive poses come out already applied
+to their base pose.
+
 `--only` writes just the listed textures / meshes (no JSON, siblings or references): the store-image
 browser fetches `T_UI_*` images into the add-on's cache with it.
 

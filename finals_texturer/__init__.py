@@ -3,7 +3,7 @@
 bl_info = {
     "name": "Finals Texturer",
     "author": "Finals Texturer contributors",
-    "version": (0, 19, 1),
+    "version": (0, 20, 2),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Finals",
     "description": "Imports The Finals clothing (.psk) and rebuilds its layered materials from FModel exports",
@@ -16,7 +16,8 @@ import bpy
 from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
 from bpy_extras.io_utils import ImportHelper
 
-from . import browse, character, clothing_tab, exporter, importer, library_ui, objects_tab, rigging, search, ui, weapons
+from . import (browse, character, clothing_tab, exporter, importer, library_ui, objects_tab, poses_tab, rigging,
+               search, ui, weapons)
 from .ue_assets import AssetFinder, Log
 
 ADDON_ID = __package__ or __name__
@@ -153,6 +154,7 @@ class FT_OT_rescan(bpy.types.Operator):
         character.clear_cache()
         weapons.clear_cache()
         objects_tab.clear_cache()
+        poses_tab.clear_cache()
         clothing_tab.clear_cache()
         exporter.clear_cache()
         self.report({"INFO"}, "Re-read the export folder")
@@ -211,6 +213,8 @@ class FT_PT_panel(bpy.types.Panel):
             weapons.draw(lay, context)
         elif tab == "OBJECTS":
             objects_tab.draw(lay, context)
+        elif tab == "POSES":
+            poses_tab.draw(lay, context)
         else:
             clothing_tab.draw(lay, context)
         ui.draw_footer(lay)
@@ -235,15 +239,18 @@ def register():
     character.register(_root, _report)
     weapons.register(_root, _report)
     objects_tab.register(_root, _report)
+    poses_tab.register(_root, _report)
     rigging.register()
     bpy.types.WindowManager.ft_tab = EnumProperty(
         name="Tab",
         items=(("CHARACTER", "Character", "Body, face and body type", "USER", 0),
                ("CLOTHING", "Clothing", "Import clothing and build its materials", "MATCLOTH", 1),
                ("WEAPONS", "Weapons", "Import weapons with their skins", "TOOL_SETTINGS", 3),
-               ("OBJECTS", "Objects", "Cashout objectives, death statues, arena carryables, gameplay objects", "PACKAGE", 4),
                ("RIGGING", "Rigging", "Simplify the game rig, attach clothing, Auto-Rig Pro controls",
-                "ARMATURE_DATA", 2)))
+                "ARMATURE_DATA", 2),
+               ("POSES", "Posing", "Pose a character with the game's weapon stances and MVP poses, weapon in hand",
+                "POSE_HLT", 5),
+               ("OBJECTS", "Objects", "Cashout objectives, death statues, arena carryables, gameplay objects", "PACKAGE", 4)))
     bpy.types.Scene.ft_number = IntProperty(
         name="Number decals", min=0, max=99, default=8, update=_set_numbers,
         description="Number shown by number decals (jersey numbers etc.). The game sets it per "
@@ -258,6 +265,7 @@ def unregister():
     character.unregister()
     weapons.unregister()
     objects_tab.unregister()
+    poses_tab.unregister()
     del bpy.types.WindowManager.ft_tab
     bpy.types.TOPBAR_MT_file_import.remove(_menu_import)
     del bpy.types.Scene.ft_number

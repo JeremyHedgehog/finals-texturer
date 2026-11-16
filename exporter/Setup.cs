@@ -21,6 +21,7 @@ sealed class Setup
     public string Oodle = "";
     public string Zlib = "";
     public string Detex = "";
+    public string Natives = "";     // CUE4Parse-Natives.dll (ACL animation decompression), from FModel
     public string FModelExports = "";
     public List<string> Problems = new();
 
@@ -92,9 +93,27 @@ sealed class Setup
                         .OrderByDescending(f => f.LastWriteTimeUtc).Select(f => f.FullName).FirstOrDefault() ?? "";
             }
         }
+        s.Natives = FindNatives(s.DataDir);
         if (s.Oodle.Length == 0) s.Problems.Add("FModel's Oodle library wasn't found. Open The Finals in FModel once (it downloads it).");
         if (s.Mappings.Length == 0) s.Problems.Add("No mappings file (.usmap) is set in FModel for The Finals.");
         return s;
+    }
+
+    // FModel is a single-file app: it unpacks CUE4Parse-Natives.dll to %TEMP%\.net\FModel\<hash>\ when it
+    // runs (newest folder = current FModel). Only animations (poses) need it.
+    static string FindNatives(string dataDir)
+    {
+        var hits = new List<FileInfo>();
+        foreach (var dir in new[] { Path.Combine(Path.GetTempPath(), ".net", "FModel"), dataDir })
+        {
+            try
+            {
+                if (Directory.Exists(dir))
+                    hits.AddRange(new DirectoryInfo(dir).GetFiles("CUE4Parse-Natives.dll", SearchOption.AllDirectories));
+            }
+            catch (Exception) { }
+        }
+        return hits.OrderByDescending(f => f.LastWriteTimeUtc).Select(f => f.FullName).FirstOrDefault() ?? "";
     }
 
     static bool IsFinals(JObject o) =>

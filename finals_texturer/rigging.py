@@ -202,8 +202,30 @@ def merge_vertex_groups(obj, name_map):
 #  1. Simplify
 # ---------------------------------------------------------------------------
 
+def is_follower(arm_obj):
+    """A head's armature: its bones follow the body's (character.fit_to_body). It has pelvis/head bones
+    too, but simplifying it instead of the body breaks the character (and ARP after it)."""
+    from .character import FOLLOW
+    return any(c.type == "ARMATURE" and c.name.startswith(FOLLOW) for pb in arm_obj.pose.bones for c in pb.constraints)
+
+
+def body_from_context(ctx):
+    """The body armature of whatever part of a character is active / selected (body, head, clothing, a
+    weapon in its hand): Pose Selected leaves the imported weapon active, and picking the head's armature
+    by hand is easy. Else the active armature itself (game skeletons imported by other means)."""
+    from . import posing
+    body, _rig = posing.find_target(ctx)
+    if body is not None:
+        return body
+    a = ctx.active_object
+    return a if a is not None and a.type == "ARMATURE" and not is_follower(a) else None
+
+
 def simplify_armature(arm_obj, tidy_orientation=True, report=print):
     _ensure_object_mode()
+    if is_follower(arm_obj):
+        raise RuntimeError(f"'{arm_obj.name}' is the head's rig (it follows the body). Select the body or any "
+                           f"part of the character and run Simplify again.")
     from .character import store_rest
     store_rest(arm_obj)          # keep the game rest pose for fitting heads later
     data = arm_obj.data
@@ -267,6 +289,7 @@ def simplify_armature(arm_obj, tidy_orientation=True, report=print):
 
     arm_obj[MASTER_PROP] = True
     bpy.context.scene.ft_rig.master = arm_obj
+    _reapply_pose(arm_obj, report)
     report(f"Simplified '{arm_obj.name}': {len(removed)} bones removed, {len(keep)} kept, "
            f"{merged_total} vertex groups merged on {len(meshes)} mesh(es).")
     if missing:
@@ -657,7 +680,19 @@ def _generate_arp_rig(arm_obj, arm_mode, leg_mode, report):
     rig["arp_rig"] = True
     bpy.context.scene.ft_rig.arp_rig = rig
     report(f"Auto-Rig Pro control rig '{rig.name}' now drives '{arm_obj.name}'.")
+    _reapply_pose(arm_obj, report)
     return rig
+
+
+def _reapply_pose(arm_obj, report):
+    """A pose from the Poses tab is remembered on the body; Simplify (new bone orientations) and Quick
+    Rig (needs the rest pose) lose it, so it goes back on (onto the ARP controls once a rig drives it)."""
+    from . import posing, _root
+    if arm_obj.get(posing.POSE_PROP):
+        try:
+            posing.reapply(arm_obj, _root(bpy.context), report)
+        except (OSError, ValueError, KeyError) as e:
+            report(f"Note: couldn't apply the pose again ({e})")
 
 
 # ---------------------------------------------------------------------------
@@ -704,13 +739,17 @@ class FT_OT_rig_simplify(bpy.types.Operator):
 
     @classmethod
     def poll(cls, ctx):
-        return ctx.active_object is not None and ctx.active_object.type == "ARMATURE"
+        return ctx.active_object is not None
 
     def execute(self, ctx):
         global HIP_FOLLOW
         HIP_FOLLOW = ctx.scene.ft_rig.hip_follow
+        arm = body_from_context(ctx)
+        if arm is None:
+            self.report({"ERROR"}, "Select the character (its body, head, clothing or weapon) or a game body armature")
+            return {"CANCELLED"}
         try:
-            simplify_armature(ctx.active_object, ctx.scene.ft_rig.tidy, _reporter(self))
+            simplify_armature(arm, ctx.scene.ft_rig.tidy, _reporter(self))
         except RuntimeError as e:
             self.report({"ERROR"}, str(e))
             return {"CANCELLED"}

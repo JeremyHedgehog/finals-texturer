@@ -30,16 +30,19 @@ from . import importer, names, search, ui
 from .ue_assets import AssetFinder, Log, asset_name, export_of_type, ref_path, resolve_material, skeletal_slots
 
 ITEMS_REL = os.path.join("Discovery", "Content", "Discovery", "Items")
-CATEGORIES = ("Firearms", "Melee")
+CATEGORIES = ("Firearms", "Melee", "Throwables")   # Throwables: throwing knives
 SKIP_TAGS = {"Mesh.StickerSlot"}
 # Ranked reward skins (one set on every weapon): skin folder -> rank. Listed as "Rank: <rank>", grouped
 # after the default skin in this order. The game files carry no rank tag, only these folder names.
 RANK_FOLDERS = {"LeagueGold_02": "Gold", "LeaguePlatinum_02": "Platinum", "Diamond_02": "Diamond",
                 "LeagueRuby_02": "Ruby", "LeagueEmerald_02": "Emerald"}
 RANK_ORDER = list(RANK_FOLDERS.values())
-# Items filed under Firearms that the game treats as gadgets (H+ Infuser = SMGs/SMG_Friendly_01) have a
-# DA_Persistence_Gadget_* file in their folder; they belong in a future gadgets tab, not here.
+# Items filed with the weapons that the game treats as gadgets (H+ Infuser = SMGs/SMG_Friendly_01, RPG-7 =
+# Launchers/Launcher_02, the snowball under Throwables) say so in their item data (ItemType
+# EDiscoveryItemType::Gadget); the H+ Infuser also has a DA_Persistence_Gadget_* file. They belong in a future
+# gadgets tab, not here.
 GADGET_MARK = "DA_Persistence_Gadget_"
+GADGET_TYPE = "EDiscoveryItemType::Gadget"
 DEFAULT_PART_TAGS = {"Customization.Item.Attachment.Sight.IronSights_01"}
 DEFAULT_SKIN = "DEFAULT"
 READY_ICON = {2: "CHECKMARK", 1: "INFO", 0: "ERROR"}
@@ -88,13 +91,16 @@ def _game_path_to_file(root, object_path):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def weapons(root):
-    """Weapons (folders with a DA_Item_*.json) under Items/Firearms and Items/Melee."""
+    """Weapons (folders with a DA_Item_*.json) under Items/Firearms, Items/Melee and Items/Throwables, without
+    gadgets. The name comes from the DA_UIMetaData_* matching the main DA_Item_* (DA_Item_Mac11 ->
+    DA_UIMetaData_Mac11; the folder is SMG_01), else the one named after the folder."""
     if not root:
         return []
     hit = _weapons.get(root)
     if hit is not None:
         return hit
     out = []
+    gadgets = set()
     items = os.path.join(root, ITEMS_REL)
     for cat in CATEGORIES:
         base = os.path.join(items, cat)
@@ -103,24 +109,31 @@ def weapons(root):
         for dirpath, dirs, files in os.walk(base):
             if "Skins" in dirpath.split(os.sep) or "Anim" in dirpath.split(os.sep):
                 continue
-            item = next((f for f in files if f.startswith("DA_Item_") and f.endswith(".json")
-                         and not f.startswith("DA_Item_Animation")), None)
+            folder = os.path.basename(dirpath)
+            item = _main_item(files, folder)
             if not item:
                 continue
-            if any(f.startswith(GADGET_MARK) for f in files):
+            if any(f.startswith(GADGET_MARK) for f in files) or _is_gadget(os.path.join(dirpath, item)):
+                gadgets.add(os.path.relpath(dirpath, items).replace("\\", "/"))
                 dirs[:] = []
                 continue
-            folder = os.path.basename(dirpath)
-            data = _load(os.path.join(dirpath, f"DA_UIMetaData_{folder}.json"))
-            props = next(((e.get("Properties") or {}) for e in (data if isinstance(data, list) else [])
-                          if "ItemName" in (e.get("Properties") or {})), {})
-            name = (props.get("ItemName") or {}).get("SourceString") or folder.replace("_", " ")
+            stem = item[len("DA_Item_"):-len(".json")]
+            name = ""
+            for meta in (f"DA_UIMetaData_{stem}.json", f"DA_UIMetaData_{folder}.json"):
+                data = _load(os.path.join(dirpath, meta))
+                props = next(((e.get("Properties") or {}) for e in (data if isinstance(data, list) else [])
+                              if "ItemName" in (e.get("Properties") or {})), {})
+                name = (props.get("ItemName") or {}).get("SourceString") or ""
+                if name:
+                    break
+            name = name or folder.replace("_", " ")
             sub = os.path.relpath(dirpath, items).replace("\\", "/")
             out.append({"id": sub, "dir": dirpath, "name": name, "folder": folder,
-                        "category": sub.split("/")[0] if cat == "Melee" else sub.split("/")[1]})
+                        "category": sub.split("/")[1] if cat == "Firearms" else cat if cat == "Throwables"
+                        else sub.split("/")[0]})
             dirs[:] = []                     # a weapon's subfolders aren't weapons
     # weapons from the shipped name list that aren't exported yet (listed as "not exported")
-    have = {w["id"] for w in out}
+    have = {w["id"] for w in out} | gadgets
     for sw in names.weapons():
         if sw["id"] in have:
             continue
@@ -139,6 +152,30 @@ def weapons(root):
     out.sort(key=lambda w: (w["category"], w["name"].lower()))
     _weapons[root] = out
     return out
+
+
+VARIANT_RX = re.compile(r"_(GunSwap|LTM_\w+|OneShot|AnimationMelee\w*)$|^AnimationMelee", re.IGNORECASE)
+
+
+def _main_item(files, folder):
+    """The weapon's own DA_Item_*.json in its folder: not a game-mode variant (_GunSwap, _LTM_…, _OneShot)
+    and, among the rest, the one whose name is closest to the folder's (Sledgehammer_01 also holds the
+    Excalibur event item; SMG_01's is DA_Item_Mac11)."""
+    import difflib
+    cands = [f for f in files if f.startswith("DA_Item_") and f.endswith(".json")]
+    stems = [f[len("DA_Item_"):-len(".json")] for f in cands]
+    plain = [s for s in stems if not VARIANT_RX.search(s)] or stems
+    if not plain:
+        return None
+    base = re.sub(r"_\d+$", "", folder).lower()
+    best = max(plain, key=lambda s: (difflib.SequenceMatcher(None, base, s.lower()).ratio(), -len(s)))
+    return f"DA_Item_{best}.json"
+
+
+def _is_gadget(item_json):
+    data = _load(item_json)
+    return any(((e or {}).get("Properties") or {}).get("ItemType") == GADGET_TYPE
+               for e in (data if isinstance(data, list) else []))
 
 
 def weapon_by_id(root, wid):

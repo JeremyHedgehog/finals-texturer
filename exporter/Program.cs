@@ -12,6 +12,8 @@
 //       JSONs flattened by FModel's mesh export are replaced.
 //       --only: just the listed files' textures / meshes (no .json, nothing next to or referenced by them);
 //       the add-on's store-image browser uses it to fetch T_UI_* images into its own cache.
+//       Animations (AnimSequence) are exported as .psa + .json only when listed themselves (poses tab);
+//       additive ones come out already applied to their base pose (CUE4Parse loads RefPoseSeq).
 //
 // Output: one JSON object per line on stdout ({"event": ...}), for the add-on's progress bar.
 using System.Text.RegularExpressions;
@@ -95,6 +97,7 @@ static class Program
             has_key = s.AesKey.Length > 0,
             oodle = s.Oodle.Length > 0,
             detex = s.Detex.Length > 0,
+            natives = s.Natives.Length > 0,
             fmodel_exports = s.FModelExports,
         });
         return s.Problems.Count == 0 ? 0 : 1;
@@ -106,6 +109,9 @@ static class Program
         OodleHelper.Initialize(s.Oodle);
         if (s.Zlib.Length > 0) ZlibHelper.Initialize(s.Zlib);
         if (s.Detex.Length > 0) DetexHelper.Initialize(s.Detex);
+        // CUE4Parse imports "CUE4Parse-Natives" by name; once loaded from FModel's copy, Windows reuses it
+        if (s.Natives.Length > 0)
+            try { System.Runtime.InteropServices.NativeLibrary.Load(s.Natives); } catch (Exception) { }
         var provider = new DefaultFileProvider(s.PaksDir,
             s.PaksDir == s.GameDir ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly,
             new VersionContainer((EGame)s.UeVersion), StringComparer.OrdinalIgnoreCase);
@@ -289,6 +295,8 @@ sealed class Job
         // a skin / face: the files next to it (store image T_UI_*, DA_MetaData_* names, persistence…);
         // a Blueprint (game object) has nothing of that kind
         if (file.NameWithoutExtension.StartsWith("BP_", StringComparison.OrdinalIgnoreCase)) return;
+        // an animation (pose): its folder holds dozens of other animations, nothing it needs
+        if (file.Path.Contains("/Animation/AnimationDatabase/", StringComparison.OrdinalIgnoreCase)) return;
         var dir = file.Path[..file.Path.LastIndexOf('/')];
         foreach (var f in _p.Files.Values.Where(f => f.Extension == "uasset"
                      && f.Path.StartsWith(dir + "/", StringComparison.OrdinalIgnoreCase)
@@ -311,12 +319,13 @@ sealed class Job
         if (_seen.Add(f.Path)) _queue.Enqueue((f, depth));
     }
 
-    enum Kind { Skip, Mesh, Texture, Material, Master, Curve, Data, Blueprint }
+    enum Kind { Skip, Mesh, Texture, Material, Master, Curve, Data, Blueprint, Anim }
 
     static Kind Classify(string cls)
     {
         if (cls.EndsWith("BlueprintGeneratedClass")) return Kind.Blueprint;
         if (cls is "SkeletalMesh" or "StaticMesh") return Kind.Mesh;
+        if (cls is "AnimSequence") return Kind.Anim;                // poses (.psa), only exported as start files
         if (cls is "MaterialInstanceConstant" or "MaterialInstanceDynamic") return Kind.Material;
         if (cls == "Material") return Kind.Master;
         if (cls.StartsWith("Curve")) return Kind.Curve;           // CurveLinearColor(Atlas), CurveFloat
@@ -348,7 +357,7 @@ sealed class Job
                        ?? exports.FirstOrDefault();
             if (main == null) continue;
             var kind = Classify(main.ExportType);
-            if (kind == Kind.Skip && depth > 0) continue;
+            if (kind is Kind.Skip or Kind.Anim && depth > 0) continue;
             // a Blueprint's references: its parts (meshes, materials, textures) and its parent Blueprint
             // (inherited parts), not the gameplay classes, sounds, effects… it also points at
             if (_fromBlueprint.Contains(file.Path) && !_bpParents.Contains(file.Path)
@@ -358,7 +367,7 @@ sealed class Job
 
             if (Only)
             {
-                if (kind is Kind.Mesh or Kind.Texture) _assets.Add((main, file));
+                if (kind is Kind.Mesh or Kind.Texture or Kind.Anim) _assets.Add((main, file));
                 continue;
             }
             string json;
@@ -368,6 +377,11 @@ sealed class Job
 
             if (kind is Kind.Mesh or Kind.Texture && main.ExportType != "CurveLinearColorAtlas")
                 _assets.Add((main, file));
+            if (kind == Kind.Anim)
+            {
+                if (depth == 0) _assets.Add((main, file));
+                continue;
+            }
             if (kind == Kind.Skip) continue;
             if (kind == Kind.Data && depth >= MaxDataDepth) continue;
 
@@ -446,7 +460,8 @@ sealed class Job
         if (!Directory.Exists(dir)) return false;
         var name = f.NameWithoutExtension;
         return File.Exists(Path.Combine(dir, name + ".psk")) || File.Exists(Path.Combine(dir, name + ".pskx"))
-            || File.Exists(Path.Combine(dir, name + ".png")) || File.Exists(Path.Combine(dir, name + "_LAYER0.png"));
+            || File.Exists(Path.Combine(dir, name + ".png")) || File.Exists(Path.Combine(dir, name + "_LAYER0.png"))
+            || File.Exists(Path.Combine(dir, name + ".psa"));
     }
 
     void Fail(string path, Exception? e)

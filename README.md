@@ -26,6 +26,7 @@ against them, so items look the way they do in the store, not like flat texture 
   - [Clothing tab](#clothing-tab)
   - [Weapons tab](#weapons-tab)
   - [Objects tab](#objects-tab)
+  - [Posing tab](#posing-tab)
   - [Rigging tab](#rigging-tab)
 - [Preferences](#preferences)
 - [Troubleshooting](#troubleshooting)
@@ -42,8 +43,9 @@ against them, so items look the way they do in the store, not like flat texture 
 | **Character** | Every face, on the Light, Medium or Heavy body, with skin tone, eyes, teeth, eyelashes, brows and body-type shape keys |
 | **Clothing** | Every clothing item and outfit in every skin, fitted to the chosen body class, with the game's layered materials (colour schemes, patterns, wear, decals) |
 | **Weapons** | Every weapon assembled from its parts, with any of its skins, including the rank skins (Gold, Platinum, Diamond, Ruby, Emerald) |
-| **Objects** | Cashout objectives (cashbox, vault, cashout station), death statues in every team colour, arena carryables, gameplay objects (jump pads, ziplines, ladders, cannon…) and about 440 props you can pick up or break |
 | **Rigging** | Simplifies the game's body rig, attaches clothing to it, and can build an Auto-Rig Pro control rig |
+| **Posing** | The game's own weapon stances and end-of-match (MVP) poses on your character, with the weapon in its hands |
+| **Objects** | Cashout objectives (cashbox, vault, cashout station), death statues in every team colour, arena carryables, gameplay objects (jump pads, ziplines, ladders, cannon…) and about 440 props you can pick up or break |
 
 It also covers:
 
@@ -168,6 +170,20 @@ names) into your FModel Export Folder. FModel doesn't have to be open.
 - Death statues have a **Team colour** option (blue, orange, pink, purple, red, indigo, lime). It also
   recolours statues you've selected.
 
+### Posing tab
+
+- Pick a **weapon** and a **pose**: its standing, aiming, crouching and sprinting stances, the
+  **MVP pose** from the end-of-match screen, and the stances of skins with their own grip (the sword's
+  baseball bat, katana…). **No weapon** lists the objective and support MVP poses.
+- Select a character (its body, head, any clothing, or its Auto-Rig Pro rig) and click **Pose Selected**.
+  The weapon goes into the right hand where the game holds it: one you've selected, the one already in the
+  hand, or a newly imported one (the Weapons tab's skin if it's the same weapon).
+- Works on the game rig, the simplified rig and an **Auto-Rig Pro** rig (the pose goes onto its controls,
+  so you can keep animating). You can pose before or after rigging: Simplify and Generate ARP Control Rig
+  put the pose back on. Light and Heavy bodies and both import sizes are supported.
+- **Rest Pose** puts the character back. Poses download with **Export Now** (they need FModel to have
+  run once on this computer).
+
 ### Rigging tab
 
 Based on zebby's rig tools.
@@ -225,6 +241,9 @@ Import Size is also in each tab's Options fold-out.
 - Some items have no shop name in the game files and show a placeholder in brackets.
 - Zipline cables and full ladders are built by game code at runtime, so only their parts can be imported.
 - Gadgets are not included yet.
+- Poses: emotes and the other menu poses aren't included yet. With an Auto-Rig Pro rig, the knees can
+  sit about 1 cm off the game pose (IK legs). The game doesn't record which MVP pose belongs to which
+  weapon; they're matched by name.
 
 ---
 

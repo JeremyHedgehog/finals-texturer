@@ -56,8 +56,9 @@ def _belongs_to(path, mesh_dir):
             or path.startswith(norm(os.path.join(mesh_dir, "Skins")) + os.sep))
 
 
-def skin_parts(finder, skin_path, tags=()):
-    """Meshes a skin (DA) is made of: [(object path, kind, attachment socket)].
+def skin_parts(finder, skin_path, tags=(), with_vp=False):
+    """Meshes a skin (DA) is made of: [(object path, kind, attachment socket)]
+    (with_vp: [(…, VisualParts entry)] for the socket placement, see sockets.py).
 
     `tags` (e.g. "Customization.Archetype.Light") apply the parts' mesh
     replacements, like the body swapping SK_Body_M for SK_Body_L.
@@ -76,7 +77,8 @@ def skin_parts(finder, skin_path, tags=()):
                 new = ref_path(to.get(f"Replacement{kind}"))
                 if to.get("bOverrideMesh") and new:
                     path = new
-            parts.append((path, kind, vp.get("AttachmentSocket", "")))
+            part = (path, kind, vp.get("AttachmentSocket", ""))
+            parts.append(part + (vp,) if with_vp else part)
     return parts
 
 
@@ -129,14 +131,32 @@ def find_part_file(finder, object_path, lod_hint=""):
     return ""
 
 
+def _gender():
+    g = getattr(bpy.context.scene, "ft_char_gender", "MALE") if bpy.context.scene else "MALE"
+    return "female" if str(g).lower().startswith("f") else "male"
+
+
+def _place_static(objs, kind, socket, vp, tags, cls, log):
+    """Static meshes attached to a socket go where the game puts them (socket x local transform, see
+    sockets.py), on the Medium body; fit_class scales them to the class afterwards."""
+    from . import sockets
+    if kind != "StaticMesh" or not vp or not socket or socket == "None":
+        return
+    unit = next((o.get("ft_unit_scale") for o in objs if o.get("ft_unit_scale")), None) or import_scale()
+    if not sockets.place(objs, vp, unit, tags, cls or "M", _gender()):
+        log.info(f"  socket '{socket}' isn't in the socket table: left where the mesh was modelled.")
+
+
 def _mark_socket(objs, kind, socket):
-    """Static meshes (hats, glasses…) are modelled in place on the Medium body
-    and attached to a bone socket in game: remember it, so the Rigging tab's
-    Attach can parent them to that bone."""
+    """Static meshes (hats, glasses…) are attached to a bone socket in game:
+    remember the body bone it follows, so the Rigging tab's Attach can parent
+    them to that bone."""
+    from . import sockets
     if kind == "StaticMesh" and socket and socket != "None":
         for o in objs:
             if o.type == "MESH":
-                o["ft_socket"] = socket
+                o["ft_socket"] = sockets.attach_bone(socket)
+                o["ft_socket_name"] = socket
 
 
 def import_skin_parts(main_obj, root, skin_choice, log, cls=None):
@@ -154,12 +174,12 @@ def import_skin_parts(main_obj, root, skin_choice, log, cls=None):
     if cls is None:
         cls = mesh_class(mesh_name)
     tags = class_tags(cls)
-    parts = skin_parts(finder, skin_path, tags)
+    parts = skin_parts(finder, skin_path, tags, with_vp=True)
     if len(parts) < 2:
         return []
     own = mesh_base_name(mesh_name).lower()
     new_objs = []
-    for path, kind, socket in parts:
+    for path, kind, socket, vp in parts:
         if mesh_base_name(asset_name(path)).lower() == own:
             continue
         f = find_part_file(finder, path, cls)
@@ -168,6 +188,7 @@ def import_skin_parts(main_obj, root, skin_choice, log, cls=None):
                      "Export its folder in FModel to include it.")
             continue
         objs = import_psk(f, log)
+        _place_static(objs, kind, socket, vp, tags, cls, log)
         fit_class(objs, f, cls, log)
         _mark_socket(objs, kind, socket)
         for o in objs:
@@ -420,23 +441,25 @@ def import_item(skin_path, root, log, whole_skin=True, lod_hint=""):
     """
     finder = make_finder(root, os.path.dirname(skin_path), log)
     tags = class_tags(lod_hint)
-    parts = skin_parts(finder, skin_path, tags)
+    parts = skin_parts(finder, skin_path, tags, with_vp=True)
     if not parts:
         log.warn(f"{os.path.basename(skin_path)} lists no meshes (it may change the body or "
                  "another item instead, e.g. face paint or a voice).")
         return []
     main_file = ""
     main_kind = main_socket = ""
-    for path, main_kind, main_socket in parts:
+    main_vp = None
+    for path, main_kind, main_socket, main_vp in parts:
         main_file = find_part_file(finder, path, lod_hint)
         if main_file:
             break
     if not main_file:
-        for path, _k, _s in parts:
+        for path, _k, _s, _v in parts:
             log.warn(f"Mesh {asset_name(path)} isn't exported (game path {path}). "
                      "Export its folder in FModel, then try again.")
         return []
     objs = import_psk(main_file, log)
+    _place_static(objs, main_kind, main_socket, main_vp, tags, lod_hint, log)
     if lod_hint:
         fit_class(objs, main_file, lod_hint, log)
     _mark_socket(objs, main_kind, main_socket)
