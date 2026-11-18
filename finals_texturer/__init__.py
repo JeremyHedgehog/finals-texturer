@@ -16,8 +16,8 @@ import bpy
 from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
 from bpy_extras.io_utils import ImportHelper
 
-from . import (browse, character, clothing_tab, exporter, importer, library_ui, objects_tab, poses_tab, rigging,
-               search, ui, weapons)
+from . import (browse, character, clothing_tab, exporter, first_person, importer, library_ui, objects_tab,
+               poses_tab, rigging, search, ui, weapons)
 from .ue_assets import AssetFinder, Log
 
 ADDON_ID = __package__ or __name__
@@ -155,6 +155,7 @@ class FT_OT_rescan(bpy.types.Operator):
         weapons.clear_cache()
         objects_tab.clear_cache()
         poses_tab.clear_cache()
+        first_person.clear_cache()
         clothing_tab.clear_cache()
         exporter.clear_cache()
         self.report({"INFO"}, "Re-read the export folder")
@@ -214,7 +215,11 @@ class FT_PT_panel(bpy.types.Panel):
         elif tab == "OBJECTS":
             objects_tab.draw(lay, context)
         elif tab == "POSES":
-            poses_tab.draw(lay, context)
+            lay.row().prop(context.scene, "ft_pose_mode", expand=True)
+            if context.scene.ft_pose_mode == "FIRST_PERSON":
+                first_person.draw(lay, context)
+            else:
+                poses_tab.draw(lay, context)
         else:
             clothing_tab.draw(lay, context)
         ui.draw_footer(lay)
@@ -240,6 +245,7 @@ def register():
     weapons.register(_root, _report)
     objects_tab.register(_root, _report)
     poses_tab.register(_root, _report)
+    first_person.register(_root, _report)
     rigging.register()
     bpy.types.WindowManager.ft_tab = EnumProperty(
         name="Tab",
@@ -266,6 +272,7 @@ def unregister():
     weapons.unregister()
     objects_tab.unregister()
     poses_tab.unregister()
+    first_person.unregister()
     del bpy.types.WindowManager.ft_tab
     bpy.types.TOPBAR_MT_file_import.remove(_menu_import)
     del bpy.types.Scene.ft_number

@@ -15,6 +15,9 @@ Per weapon (ids as in names.json.gz):
   …Sprint, …ADS: single-frame AnimSequences on _3P_MasterSkeleton). The weapon's *Properties* data asset
   names its default bundle (ItemAnimationBundle); skins with their own grip name theirs
   (WeaponAnimationBundle, e.g. the sword's baseball bat).
+- fp / fp_skins: first-person animations (First Person mode of the Posing tab) from the same bundles:
+  FirstPersonBasePose…, InspectWeaponLoop (AnimSequences on the master skeleton, camera bone included);
+  fp_skins names the bundle of skins with their own first-person set (e.g. the Akimbanana).
 - mvp: end-of-match poses (Frontend/MVP/HM_Frontend_MVP_P_<name>_00). Nothing in the game data links them
   to weapons (game script does), so they're matched by name; ALIASES covers the abbreviations/typos.
 Poses without a weapon (objective, support) go to "other".
@@ -41,6 +44,9 @@ ALIASES = {
     "remington1900": "RemingtonModel1900", "winchester": "Shotgun_03",
     "honcho": "ShotgunBreakAction_02",      # by elimination: the only shotgun left without an MVP pose
 }
+FP_KINDS = (("FirstPersonBasePose", "Hold"), ("FirstPersonBasePoseADS", "Aim (ADS)"),
+            ("FirstPersonBasePoseCrouch", "Crouch"), ("FirstPersonBasePoseSprint", "Sprint"),
+            ("FirstPersonBaseSlide", "Slide"), ("InspectWeaponLoop", "Inspect"))
 OTHER_NAMES = {"Objective": "Objective", "Support": "Support", "Snowball": "Snowball (gadget)"}
 
 
@@ -85,20 +91,20 @@ def main(dump, mvp_list, arch_dump, check=False):
     bundle_cache = {}
 
     def bundle(gp):
-        """{pose kind: game path} of a bundle's third-person poses."""
+        """{pose kind: game path} of a bundle's third- and first-person poses."""
         if gp not in bundle_cache:
             got = {}
             for o in load_gp(gp):
                 wa = (o.get("Properties") or {}).get("WeaponAnimations") or {}
-                for key, _label in KINDS:
+                for key, _label in KINDS + FP_KINDS:
                     if ref(wa.get(key)):
                         got[key] = game_path(ref(wa.get(key)))
             bundle_cache[gp] = got
         return bundle_cache[gp]
 
-    def poses(*chain):
+    def poses(*chain, kinds=KINDS):
         out, seen = [], set()
-        for key, label in KINDS:
+        for key, label in kinds:
             p = next((bundle(gp)[key] for gp in chain if gp and key in bundle(gp)), "")
             if p and p not in seen:
                 seen.add(p)
@@ -149,8 +155,19 @@ def main(dump, mvp_list, arch_dump, check=False):
             if ps and ps != base:
                 bundles[gp] = {"name": label_of(gp.rsplit("/", 1)[-1], wid, base),
                                "poses": ps}
+        fp = {}
+        fp_base = poses(default, arch, kinds=FP_KINDS)
+        if fp_base:
+            fp[default or arch] = {"name": "Default", "anims": fp_base}
+        for gp in sorted(set(skins.values())):
+            fa = poses(gp, default, arch, kinds=FP_KINDS)
+            if fa and fa != fp_base:
+                fp[gp] = {"name": label_of(gp.rsplit("/", 1)[-1], wid, base), "anims": fa}
         out[wid] = {"name": w["name"], "default": (default or arch) if base else "",
                     "bundles": bundles, "skins": {k: v for k, v in skins.items() if v in bundles}, "mvp": []}
+        if fp:
+            out[wid]["fp"] = fp
+            out[wid]["fp_skins"] = {k: v for k, v in skins.items() if v in fp}
 
     # MVP poses by name
     keys = {}
@@ -193,7 +210,7 @@ def main(dump, mvp_list, arch_dump, check=False):
         w["mvp"].sort(key=lambda p: ("Fallback" in p, p))
     other.sort()
     res = {"version": 1, "generated": time.strftime("%Y-%m-%d"),
-           "weapons": {k: v for k, v in out.items() if v["bundles"] or v["mvp"]}, "other": other}
+           "weapons": {k: v for k, v in out.items() if v["bundles"] or v["mvp"] or v.get("fp")}, "other": other}
     if check:
         for wid, w in sorted(res["weapons"].items()):
             print(f"{w['name']:24s} {wid:48s} bundles={[b['name'] for b in w['bundles'].values()]} "
@@ -205,7 +222,8 @@ def main(dump, mvp_list, arch_dump, check=False):
     with open(os.path.join(DATA, "poses.json"), "w", encoding="utf-8") as fh:
         json.dump(res, fh, separators=(",", ":"))
     n = sum(len(b["poses"]) for w in res["weapons"].values() for b in w["bundles"].values())
-    print(f"poses.json: {len(res['weapons'])} weapons, {n} stance poses, "
+    nfp = sum(len(b["anims"]) for w in res["weapons"].values() for b in (w.get("fp") or {}).values())
+    print(f"poses.json: {len(res['weapons'])} weapons, {n} stance poses, {nfp} first-person animations, "
           f"{sum(len(w['mvp']) for w in res['weapons'].values())} MVP poses, {len(other)} other; "
           f"unmatched MVP: {unmatched}")
 

@@ -189,6 +189,21 @@ names) into your FModel Export Folder. FModel doesn't have to be open.
 - **Rest Pose** puts the character back. Poses download with **Export Now** (they need FModel to have
   run once on this computer).
 
+**First Person** (switch at the top of the tab) shows the game's first-person view:
+
+- Pick a **weapon** and a **view**: hold, aim (ADS), crouch, sprint, slide and the inspect. Skins with their
+  own first-person set (the Akimbanana, Finger Guns…) list theirs first when that skin is in the hand, selected,
+  or picked in the Weapons tab.
+- Select a character and click **Set Up First Person**. The weapon goes into its hands (the same rules as
+  above; dual weapons get one in each hand), a camera **FP_Camera** follows the game's first-person camera
+  bone, and the viewport looks through it. **FOV** is horizontal, like the game's setting.
+- **Arms only** hides everything but the arms, hands, gloves and sleeves. For the inspect, a **Frame** slider
+  picks the moment.
+- **Bake Pose** keeps the current frame as a normal pose (the weapon then follows hand_r); **Reset** shows
+  the whole body again and puts it back in the rest pose. Views download with **Export Now**.
+- Both modes add twist bones along the forearms (driven by the hand's roll), so a rolled wrist doesn't pinch
+  like a candy wrapper; Simplify merges them away and posing adds them back.
+
 ### Rigging tab
 
 Based on zebby's rig tools.
