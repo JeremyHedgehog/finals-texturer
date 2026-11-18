@@ -634,14 +634,25 @@ def build_feather(ctx):
 def build_attachment(ctx):
     """M_CharacterAttachment family (charms, glasses frames, masks, badges).
 
-    CR  = colour (RGB) + roughness (A), roughness scaled by "Roughness".
-    NOH = normal (RG) + ambient occlusion (B) + metal mask (A, used when
-          ActivateAlphaMetallic is on), metallic scaled by "Metallic".
+    CR  = colour (RGB) × ColorMultiply, ColorDesaturation (Rec. 709 luminance) + roughness (A) × Roughness.
+    NOH = normal (RG) + B + A. Compiled shader (2026-11-18, Gems nails / earrings / brooch exact):
+          metallic = sat(lerp(B, A, ActivateAlphaMetallic_s) × Metallic) with ActivateMetallicTexture, else 0;
+          ActivateOpacity: opacity = B (masked, dithered). B is ambient occlusion only when
+          the alpha holds the metal, and AO goes to the G-buffer's AO channel, never into the colour (the old
+          "colour × B" turned the Gems nails black).
     """
     p, nb, log = ctx.p, ctx.nb, ctx.log
     bsdf = ctx.bsdf()
     cr = ctx.tex(p.t("CR"), data=False, packed=True, label="CR (colour, A roughness)")
     color = cr.outputs["Color"] if cr is not None else _col(p.v("ColorTint", (0.5, 0.5, 0.5, 1)))
+    cmul = p.s("ColorMultiply", 1.0)
+    if cr is not None and cmul != 1.0:
+        color = nb.mix(color, ctx.param_color("ColorMultiply", (cmul, cmul, cmul, 1.0)), 1.0, "MULTIPLY",
+                       label="ColorMultiply")
+    cdes = p.s("ColorDesaturation", 0.0)
+    if cr is not None and cdes:
+        lum = nb.vmath("DOT_PRODUCT", color, (0.212639, 0.715169, 0.072192), label="Luminance (Rec. 709)")
+        color = nb.mix(color, nb.combine(lum, lum, lum), cdes, label="ColorDesaturation")
     if p.sw("UseColorTint"):
         color = nb.mix(color, _col(p.v("ColorTint")), 1.0, "MULTIPLY", label="ColorTint")
     if p.sw("ActivateColorMask") and p.t("ColorMask"):
@@ -655,13 +666,16 @@ def build_attachment(ctx):
     noh = ctx.tex(p.t("NOH") or p.t("NOM"), data=True, packed=True, label="NOH (normal RG, AO B, metal A)")
     metallic = 0.0
     if noh is not None:
-        normal, ao = _packed_normal(ctx, noh, p.s("NormalIntensity", 1.0))
+        normal, blue = _packed_normal(ctx, noh, p.s("NormalIntensity", 1.0))
         nb.feed(bsdf.inputs["Normal"], normal)
-        if p.s("UseAmbientOcclusion", 1.0):
-            ao = nb.math("POWER", ao, p.s("AOPower", 1.0))
-            color = nb.mix(color, ao, 1.0, "MULTIPLY", label="Ambient Occlusion")
-        if p.sw("ActivateAlphaMetallic") or p.s("ActivateAlphaMetallic_s"):
-            metallic = nb.mul(noh.outputs["Alpha"], p.s("Metallic", 1.0), clamp=True)
+        if p.sw("ActivateMetallicTexture"):          # off: the compiled shader writes metal 0 (rose brooch)
+            alpha_metal = 1.0 if p.sw("ActivateAlphaMetallic") else                 max(0.0, min(1.0, p.s("ActivateAlphaMetallic_s", 0.0)))
+            src = noh.outputs["Alpha"] if alpha_metal >= 1.0 else blue if alpha_metal <= 0.0 else                 nb.math("MULTIPLY_ADD", nb.math("SUBTRACT", noh.outputs["Alpha"], blue), alpha_metal, blue)
+            metallic = nb.mul(src, p.s("Metallic", 0.0), clamp=True)
+        if p.sw("ActivateOpacity"):
+            # masked: kept where 1.02·B + dither·0.83 ≥ 0.8333 → coverage sat((1.02·B − 0.0033) / 0.83)
+            nb.feed(bsdf.inputs["Alpha"], nb.math("MULTIPLY_ADD", blue, 1.02 / 0.83, -0.0033 / 0.83, clamp=True,
+                                                  label="Opacity (NOH B, dithered)"))
     for k in range(1, 9):
         if p.sw(f"{k}_UseDecal"):
             color = _old_gen_decal(ctx, k, color)
@@ -677,8 +691,8 @@ def build_attachment(ctx):
             nb.feed(bsdf.inputs["Emission Color"],
                     nb.mix(em.outputs["Color"], _col(p.v("EmissiveColor", (1, 1, 1, 1))), 1.0, "MULTIPLY"))
             nb.feed(bsdf.inputs["Emission Strength"], p.s("EmissiveMultiply", 1.0))
-    if p.sw("ActivateOpacity"):
-        log.info("  This attachment uses an opacity mask that isn't rebuilt yet.")
+    if p.sw("ActivateOpacity") and noh is None:
+        log.info("  This attachment's opacity mask (NOH blue) isn't exported.")
     ctx.finish(two_sided=bool(p.two_sided))
 
 
@@ -700,7 +714,7 @@ def build_glass(ctx):
         if g is not None:
             color = nb.mix(g.outputs["Color"], color, 1.0, "MULTIPLY", label="ColorTint")
     nb.feed(bsdf.inputs["Base Color"], color)
-    nb.feed(bsdf.inputs["Roughness"], max(0.0, min(1.0, p.s("Roughness", 0.0))))
+    nb.feed(bsdf.inputs["Roughness"], max(0.0, min(1.0, p.s("Roughness", p.s("GlassRoughness", 0.0)))))
     nb.feed(bsdf.inputs["Specular IOR Level"], max(0.0, min(1.0, p.s("Specular", 1.0))))
     lw = nb.node("ShaderNodeLayerWeight", "Edge (fresnel)")
     lw.inputs["Blend"].default_value = 0.5
@@ -823,3 +837,119 @@ def build_team_color(ctx):
     nb.feed(bsdf.inputs["Metallic"], by_mask(metal))
     nb.feed(bsdf.inputs["Specular IOR Level"], by_mask(spec))
     ctx.finish(two_sided=bool(p.two_sided))
+
+
+WEAPON_DTN = "/Game/Discovery/Items/Shared/Textures/Details/Weapon_DTN.Weapon_DTN"
+
+
+def build_watch(ctx):
+    """M_Watch_Base / M_Watch_Digital (watches), from the compiled shaders (2026-11-18).
+
+    UV = UV1 × (uTiling, vTiling). CR = colour × ColorMultiply + roughness (A). NMH: normal RG, B = opacity
+    (NMH_BlueAsOpacity, clip 0.333) / occlusion (G-buffer only) / glow mask (UseEmissive), A = metallic.
+    UseDetailTexture (default on): Weapon_DTN slice Detail_Type on UV2 × Detail_Tiling, d = its alpha:
+    colour × (1 + 0.3 (1 − 2d)), roughness × (1 + Detail_RoughnessStrength (2d − 1)), normal RG ×
+    (1 + Detail_NormalStrength (2·detail RG − 1)).
+    Digital: four digits HH MM from NumbersFont (10 digits in a row) at UV × NumbersScaleUV + NumbersOffsetUV
+    (UV2 with NumbersUseSecondaryUV): cell k = floor(4u), x = 4u − k ± HourMinuteDistance (hours +, minutes −),
+    font u = (digit + x) / 10; mask = smoothstep(SmoothstepMin, +0.05, font R) paints TimeBaseColor and the
+    glow TimeEmissiveColor. The game shows its clock; here the time is the "Watch hours / minutes" values.
+    Glow = lerp(EmissiveColor × EmissiveIntensity × B, TimeEmissiveColor, digits) × 0.05. The sundial master
+    (M_Watch_SunDial_*) gets the base part only.
+    """
+    p, nb = ctx.p, ctx.nb
+    bsdf = ctx.bsdf()
+    ctx.section("Textures")
+    tiling = (p.s("uTiling", 1.0), p.s("vTiling", 1.0))
+    uv = ctx.uv() if tiling == (1.0, 1.0) else nb.vmath("MULTIPLY", ctx.uv(), (tiling[0], tiling[1], 1.0),
+                                                        label="UV × tiling")
+    cr = ctx.tex(p.t("CR"), data=False, packed=True, vector=uv, label="CR (colour, A roughness)")
+    nmh = ctx.tex(p.t("NMH"), data=True, packed=True, vector=uv, label="NMH (normal RG, B mask, A metal)")
+    color = cr.outputs["Color"] if cr is not None else (0.5, 0.5, 0.5, 1.0)
+    cm = p.v("ColorMultiply", (1, 1, 1, 1))
+    if tuple(cm[:3]) != (1.0, 1.0, 1.0):
+        color = nb.mix(color, ctx.param_color("ColorMultiply", _col(cm)), 1.0, "MULTIPLY", label="ColorMultiply")
+    rough = cr.outputs["Alpha"] if cr is not None else 0.5
+    emissive = p.sw("UseEmissive")
+    blue = nb.separate(nmh.outputs["Color"])[2] if nmh is not None else None
+
+    digits = None
+    if p.t("NumbersFont"):
+        ctx.section("Digits (time)")
+        digits = _watch_digits(ctx)
+        if digits is not None:
+            color = nb.mix(color, ctx.param_color("TimeBaseColor", _col(p.v("TimeBaseColor", (0, 0, 0, 1)))),
+                           digits, label="Digits → TimeBaseColor")
+
+    dtn = None
+    if p.sw("UseDetailTexture", True):
+        ctx.section("Detail")
+        dtn = ctx.slice(WEAPON_DTN, p.s("Detail_Type", 0.0), data=True, packed=True,
+                        scale=p.s("Detail_Tiling", 1.0) or 1.0, label="Detail (Weapon_DTN: normal RG, A)")
+    if dtn is not None:
+        d = dtn.outputs["Alpha"]
+        color = nb.vmath("SCALE", color, scale=nb.math("MULTIPLY_ADD", d, -0.6, 1.3), label="Detail colour")
+        rs = p.s("Detail_RoughnessStrength", 0.0)
+        if rs:
+            rough = nb.mul(rough, nb.math("MULTIPLY_ADD", d, 2.0 * rs, 1.0 - rs), clamp=True)
+    ctx.section("Material")
+    if nmh is not None:
+        r, g, _b = nb.separate(nmh.outputs["Color"], label="NMH channels")
+        ns = p.s("Detail_NormalStrength", 0.0) if dtn is not None else 0.0
+        if ns:
+            dr, dg, _db = nb.separate(dtn.outputs["Color"], label="Detail normal")
+            r = nb.mul(r, nb.math("MULTIPLY_ADD", nb.math("MULTIPLY_ADD", dr, 2.0, -1.0), ns, 1.0))
+            g = nb.mul(g, nb.math("MULTIPLY_ADD", nb.math("MULTIPLY_ADD", dg, 2.0, -1.0), ns, 1.0))
+        rg = nb.group(groups.normal_from_rg(), label="Normal from RG")
+        nb.feed(rg.inputs["X"], r)
+        nb.feed(rg.inputs["Y"], g)
+        nb.feed(rg.inputs["Strength"], 1.0)
+        nb.feed(bsdf.inputs["Normal"], ctx.normal_map(rg.outputs[0]))
+        nb.feed(bsdf.inputs["Metallic"], nmh.outputs["Alpha"])
+        if p.s("NMH_BlueAsOpacity", 0.0) >= 0.5 and not emissive:
+            nb.feed(bsdf.inputs["Alpha"], nb.math("GREATER_THAN", blue, 0.3333, label="Opacity clip (NMH B)"))
+    nb.feed(bsdf.inputs["Base Color"], color)
+    nb.feed(bsdf.inputs["Roughness"], rough)
+    if emissive:
+        glow = nb.mix((0, 0, 0, 1), ctx.param_color("EmissiveColor", _col(p.v("EmissiveColor", (1, 1, 1, 1)))),
+                      blue if blue is not None else 1.0, label="Glow mask (NMH B)")
+        glow = nb.vmath("SCALE", glow, scale=ctx.param_value("EmissiveIntensity", p.s("EmissiveIntensity", 1.0)),
+                        label="× EmissiveIntensity")
+        if digits is not None and "TimeEmissiveColor" in p.vectors:
+            tcol = ctx.param_color("TimeEmissiveColor", _col(p.v("TimeEmissiveColor")))
+            glow = nb.mix(glow, tcol, digits, label="Digits glow (TimeEmissiveColor)")
+        nb.feed(bsdf.inputs["Emission Color"], glow)
+        # the compiled shader scales the glow by 0.05 (× a per-object value, default 1)
+        nb.feed(bsdf.inputs["Emission Strength"], ctx.param_value("Emissive scale (game 0.05)", 0.05))
+    ctx.finish(two_sided=bool(p.two_sided))
+
+
+def _watch_digits(ctx):
+    """Mask of the digital watch's time digits (see build_watch), or None if the font isn't exported."""
+    p, nb = ctx.p, ctx.nb
+    hours = ctx.param_value("Watch hours", 10.0)
+    minutes = ctx.param_value("Watch minutes", 8.0)
+    sep = nb.separate(ctx.uv(detail=bool(p.s("NumbersUseSecondaryUV", 0.0))), label="Digits UV")
+    sc, off = p.v("NumbersScaleUV", (1, 1, 0, 0)), p.v("NumbersOffsetUV", (0, 0, 0, 0))
+    u = nb.math("MULTIPLY_ADD", sep[0], sc[0], off[0], clamp=True, label="Display u")
+    v = nb.math("MULTIPLY_ADD", nb.math("SUBTRACT", 1.0, sep[1]), sc[1], off[1], clamp=True, label="Display v (UE)")
+    u4 = nb.mul(u, 4.0)
+    k = nb.math("MINIMUM", nb.math("FLOOR", u4), 3.0, label="Digit cell 0-3")
+    hmd = p.s("HourMinuteDistance", 0.0)
+    tens = lambda x: nb.math("FLOOR", nb.mul(x, 0.1))
+    ones = lambda x: nb.math("FLOORED_MODULO", nb.math("FLOOR", x), 10.0)
+    vals = (tens(hours), ones(hours), tens(minutes), ones(minutes))
+    digit = vals[0]
+    for i in (1, 2, 3):
+        digit = nb.math("MULTIPLY_ADD", nb.math("SUBTRACT", vals[i], digit), nb.math("GREATER_THAN", k, i - 0.5),
+                        digit, label=f"Digit for cell {i}+")
+    shift = nb.math("MULTIPLY_ADD", nb.math("GREATER_THAN", k, 1.5), -2.0 * hmd, hmd, label="± HourMinuteDistance")
+    x = nb.add(nb.sub(u4, k), shift)
+    fu = nb.mul(nb.add(digit, x), 0.1)
+    font = ctx.tex(p.t("NumbersFont"), data=True, vector=nb.combine(fu, nb.math("SUBTRACT", 1.0, v), 0.0),
+                   label="NumbersFont")
+    if font is None:
+        return None
+    lo = p.s("SmoothstepMin", 0.5)
+    t = nb.math("MULTIPLY", nb.math("SUBTRACT", ctx.red(font), lo), 1.0 / 0.05, clamp=True)
+    return nb.math("MULTIPLY", nb.mul(t, t), nb.math("MULTIPLY_ADD", t, -2.0, 3.0), label="Digit mask (smoothstep)")

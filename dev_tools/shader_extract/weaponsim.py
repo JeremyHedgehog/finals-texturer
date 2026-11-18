@@ -40,6 +40,9 @@ def srgb_to_linear(c):
     return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
 
 
+VS_ONLY_TEXTURES = ("Pos Tex", "Rot Tex")
+
+
 class Evaluator:
     def __init__(self, exports_root, sm_dir):
         self.root = exports_root
@@ -156,6 +159,9 @@ class Evaluator:
         # the compiler drops unused textures: the graphic colour atlas without a greyscale graphic
         if "Gradient" in names and "Grayscale" not in names:
             entries = [e for e in entries if e[0] != "Gradient"]
+        # vertex-animation textures are read by the vertex shader only (M_CharacterAttachment's VAT "Pos Tex" /
+        # "Rot Tex"): counting them shifted every pixel-shader texture by two (CR read as the dissolve mask)
+        entries = [e for e in entries if e[0] not in VS_ONLY_TEXTURES]
         return {i: self._load(p) for i, (_n, p) in enumerate(entries)}, [n for n, _ in entries]
 
     # ── run ──────────────────────────────────────────────────────────────────

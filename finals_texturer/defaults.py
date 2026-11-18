@@ -90,6 +90,8 @@ EYE = "EYE"                  # M_EyeRefractive_* (eyeballs)
 EYELASH = "EYELASH"          # M_EyelashMaster
 TEETH = "TEETH"              # M_Teeth (teeth, gums, tongue)
 HAIR = "HAIR"                # M_Hair_Metahuman_* hair cards (eyebrows, hair styles)
+NAILS = "NAILS"              # M_CharacterNails_Base (nail cosmetics)
+WATCH = "WATCH"              # M_Watch_Base / M_Watch_Digital / M_Watch_SunDial_*
 GLITTER = "GLITTER"          # M_Skin_Glitter (glossy black, glitter at the edges)
 WEAPON = "WEAPON"            # M_Weapon_Base_5Layers (weapon skins, layers + graphic)
 WEAPON_PRESET = "WEAPON_PRESET"  # M_WeaponPreset_CR+NOM (weapon skins with their own model)
@@ -145,6 +147,10 @@ _KNOWN = [
     ("m_weapontext", WEAPON_TEXT, "M_WeaponText"),
     ("mi_weapon_base", WEAPON, "M_Weapon_Base_5Layers"),
     ("m_hair_metahuman", HAIR, "M_Hair_Metahuman_01"),
+    ("m_characternails", NAILS, "M_CharacterNails_Base"),
+    ("m_watch_", WATCH, "M_Watch_Base"),
+    ("m_glass_weapon", GLASS, "M_Glass_Weapon_01"),
+    ("m_cns_glitch", WEAPON_FX, "M_CNS_Glitch"),
     ("m_eyeocclusion", HIDDEN, "M_EyeOcclusion"),
     ("m_atk_canister", OBJ_CANISTER, "M_ATK_Canister_01"),
     ("m_cashout_cashbox", OBJ_CASHOUT, "M_Cashout_CashBox_01"),

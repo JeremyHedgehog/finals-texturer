@@ -3,8 +3,8 @@ import bpy, sys, importlib, os, math, mathutils, numpy as np, glob
 args = sys.argv[sys.argv.index("--") + 1:]
 rel, skin_name, out = args[0], args[1], args[2]
 yaw = float(args[3]) if len(args) > 3 else 30.0
-ROOT = r"C:/Users/bisch/Desktop/New folder"
-EXP = r"D:/BlenderStuff/Fmodel/Output/Exports"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # repository root (add-on + PSK importer copy)
+EXP = os.environ.get("FT_EXPORTS") or sys.exit("Set FT_EXPORTS to your FModel Output/Exports folder (see docs/TESTING.md)")
 CH = EXP + "/Discovery/Content/Discovery/Characters/"
 SP = os.environ["SP"]
 sys.path.insert(0, ROOT)
