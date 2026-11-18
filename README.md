@@ -79,7 +79,9 @@ It also covers:
    **Install from Disk…**, then pick the zip.
 3. Make sure the PSK importer add-on is installed and enabled too.
 
-To update, install the newer zip the same way. Your settings are kept.
+To update, click **Update Now** when the Finals panel shows *Update available* (it checks GitHub once per
+Blender session; needs **Allow Online Access** in Preferences → System → Network), or install the newer zip
+the same way. Your settings are kept. Restart Blender after updating.
 
 ---
 
@@ -233,6 +235,7 @@ Re-importing or Apply rebuilds the material and resets these values.
 | **FModel Export Folder** | FModel's `Output\Exports` folder. Imports read from here, and Export Now writes here |
 | **Import Size** | **Blender Adjusted Scale** (default): real-world size, 1 unit = 1 m. **Ingame Scale**: the game's numbers, 1 unit = 1 cm, which looks 100× too big in a default Blender scene |
 | **Store image cache** | Size of the store-image cache (max 200 MB), with a **Clear Cache** button |
+| **Check for Updates** | Ask GitHub once per session whether a newer release exists (on by default), with a **Check for Updates** button |
 
 Import Size is also in each tab's Options fold-out.
 

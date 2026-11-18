@@ -3,7 +3,7 @@
 bl_info = {
     "name": "Finals Texturer",
     "author": "Finals Texturer contributors",
-    "version": (0, 22, 1),
+    "version": (0, 23, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Finals",
     "description": "Imports The Finals clothing (.psk) and rebuilds its layered materials from FModel exports",
@@ -17,7 +17,7 @@ from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
 from bpy_extras.io_utils import ImportHelper
 
 from . import (browse, character, clothing_tab, exporter, importer, library_ui, objects_tab, poses_tab, rigging,
-               search, ui, weapons)
+               search, ui, updater, weapons)
 from .ue_assets import AssetFinder, Log
 
 ADDON_ID = __package__ or __name__
@@ -52,11 +52,16 @@ class FT_Preferences(bpy.types.AddonPreferences):
                 "168 units tall (shows as 168 m in a default Blender scene)")),
         default="REAL",
     )
+    check_updates: BoolProperty(
+        name="Check for Updates", default=True,
+        description="Once per Blender session, ask GitHub whether a newer Finals Texturer release exists and "
+                    "show it at the top of the Finals panel (needs Blender's online access)")
 
     def draw(self, context):
         self.layout.prop(self, "export_root")
         self.layout.prop(self, "import_size")
         browse.draw_prefs(self.layout)
+        updater.draw_prefs(self.layout, self)
 
 
 def _set_numbers(self, context):
@@ -197,6 +202,7 @@ class FT_PT_panel(bpy.types.Panel):
 
     def draw(self, context):
         lay = self.layout
+        updater.draw_banner(lay)
         # Shared by all tabs: every import reads from the Exports folder.
         p = _prefs(context)
         root = _root(context)
@@ -234,6 +240,7 @@ def register():
     browse.register()
     for c in CLASSES:
         bpy.utils.register_class(c)
+    updater.register(lambda: getattr(_prefs(None), "check_updates", True))
     library_ui.register(_root, ADDON_ID, _report)
     clothing_tab.register(_root, _report)
     character.register(_root, _report)
@@ -271,6 +278,7 @@ def unregister():
     del bpy.types.Scene.ft_number
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)
+    updater.unregister()
     browse.unregister()
     search.unregister()
     exporter.unregister()
