@@ -45,11 +45,52 @@ def _lib_entries():
 
 
 def _entry_parts(e):
-    """('Casual', 'BasicTshirt', 'Cotton_X' or '') from a library entry's folder, or None."""
-    parts = e["folder"].replace("\\", "/").split("Characters/", 1)[-1].split("/")
-    if len(parts) < 3 or parts[1] != "Assets":
-        return None
-    return parts[0], parts[2], (parts[4] if len(parts) > 4 and parts[3] == "Skins" else "")
+    """(category, item, skin) from a library entry's folder ('Casual', 'BasicTshirt', 'Cotton_X' or ''),
+    or None. Any folder layout under Characters (see ui.split_char_folder)."""
+    sp = ui.split_char_folder(e["folder"])
+    return sp[:3] if sp else None
+
+
+HIDDEN_CATS = ("Heads", "Body")          # faces / bodies: Character tab
+SKIP_DIRS = {"Skins", "Shared", "Textures", "Materials"}
+
+
+def _is_item_dir(d):
+    try:
+        files = os.listdir(d)
+    except OSError:
+        return False
+    return "Skins" in files or any(f.endswith((".psk", ".pskx")) or (
+        f.startswith("DA_") and f.endswith(".json") and not f.startswith(("DA_MetaData", "DA_Persistence")))
+        for f in files)
+
+
+def _exported_items(cat_dir):
+    """{item name: dir} of exported items in a category folder: '<cat>/Assets/<item>' (one level) and
+    every other layout ('<cat>/<item>', '<cat>/Nails/<item>', …; up to three levels, not inside items'
+    Skins / Textures / Materials folders)."""
+    found = {}
+    if not os.path.isdir(cat_dir):
+        return found
+    stack = [(cat_dir, "", 0)]
+    while stack:
+        d, rel, depth = stack.pop()
+        for name in sorted(os.listdir(d)):
+            sub = os.path.join(d, name)
+            if name in SKIP_DIRS or not os.path.isdir(sub):
+                continue
+            if not rel and name == "Assets":
+                for it in sorted(os.listdir(sub)):
+                    di = os.path.join(sub, it)
+                    if it not in SKIP_DIRS and os.path.isdir(di) and _is_item_dir(di):
+                        found[it] = di
+                continue
+            r = f"{rel}/{name}" if rel else name
+            if _is_item_dir(sub):
+                found.setdefault(r, sub)
+            if depth < 2:
+                stack.append((sub, r, depth + 1))
+    return found
 
 
 def categories(root):
@@ -60,29 +101,23 @@ def categories(root):
         out = set()
         if os.path.isdir(base):
             out |= {c for c in os.listdir(base) if os.path.isdir(os.path.join(base, c, "Assets"))}
-        out |= {p[0] for p in map(_entry_parts, _lib_entries()) if p and p[0] not in ("Heads", "Body")}
-        _cache[key] = sorted(out)
+        out |= {p[0] for p in (_entry_parts(e) for e in _lib_entries() if e["kind"] == "item") if p}
+        _cache[key] = sorted(out - set(HIDDEN_CATS))
     return _cache[key]
 
 
 def items(root, cat):
     key = ("items", root, cat)
     if key not in _cache:
-        base = os.path.join(root, CHARS_REL, cat, "Assets")
-        found = {}
-        if os.path.isdir(base):
-            for it in sorted(os.listdir(base)):
-                d = os.path.join(base, it)
-                if not os.path.isdir(d) or it in ("Shared", "Textures", "Materials"):
-                    continue
-                files = os.listdir(d)
-                if "Skins" in files or any(f.endswith((".psk", ".pskx")) or
-                                           (f.startswith("DA_") and f.endswith(".json")) for f in files):
-                    found[it] = d
-        for p in map(_entry_parts, _lib_entries()):
-            if p and p[0] == cat and p[1] not in found:
-                found[p[1]] = os.path.join(base, p[1])
-        _cache[key] = [{"id": f"{cat}/{it}", "dir": d, "name": _pretty(it)} for it, d in sorted(found.items())]
+        if not cat or cat not in categories(root):
+            return []        # no / unknown category: never walk the whole Characters folder
+        found = _exported_items(os.path.join(root, CHARS_REL, cat))
+        for e in _lib_entries():
+            sp = ui.split_char_folder(e["folder"]) if e["kind"] == "item" else None
+            if sp and sp[0] == cat and sp[1] not in found:
+                found[sp[1]] = os.path.join(root, *sp[3].split("/"))
+        _cache[key] = [{"id": f"{cat}/{it}", "dir": d, "name": _pretty(it.replace("/", " / "))}
+                       for it, d in sorted(found.items())]
     return _cache[key]
 
 
@@ -233,10 +268,9 @@ def status(root, skin_path, cls="M"):
     if hit is not None:
         return hit
     if not os.path.isfile(skin_path):
-        item_dir = skin_path
-        while item_dir and os.path.basename(os.path.dirname(item_dir)) != "Assets":
-            item_dir = os.path.dirname(item_dir)
-        res = _status[key] = (0, "Not exported", {"Item": [ui.game_folder(root, item_dir or os.path.dirname(skin_path))]})
+        sp = ui.split_char_folder(os.path.dirname(os.path.relpath(skin_path, root)))
+        item_dir = os.path.join(root, *sp[3].split("/")) if sp else os.path.dirname(skin_path)
+        res = _status[key] = (0, "Not exported", {"Item": [ui.game_folder(root, item_dir)]})
         return res
     log = _QuietLog()
     finder = importer.make_finder(root, os.path.dirname(skin_path), log)
@@ -307,10 +341,8 @@ def _find(context, query):
         if e["kind"] == "outfit":
             out.append((f"outfit:{idx}", library.display_name(e), "Outfit", -1, "OUTLINER_COLLECTION"))
         else:
-            parts = e["folder"].replace("\\", "/").split("Characters/", 1)[-1].split("/")
-            detail = parts[2] if len(parts) > 2 else parts[-1]
-            if len(parts) > 4:
-                detail += f" · {parts[4]}"
+            sp = ui.split_char_folder(e["folder"])
+            detail = (sp[1].rsplit("/", 1)[-1] + (f" · {sp[2]}" if sp[2] else "")) if sp else e["folder"]
             ready = library_ui._status(root, lib, e)[0]
             out.append((f"item:{idx}", library.display_name(e), detail, ready, "MATCLOTH"))
     return out
@@ -341,16 +373,75 @@ def _pick(context, ident):
     sc.ft_cloth_outfit = idx if kind == "outfit" else ""
     if kind == "outfit" or not e.get("da"):
         return
-    parts = e["folder"].replace("\\", "/").split("Characters/", 1)[-1].split("/")
-    if len(parts) < 3:
+    sp = ui.split_char_folder(e["folder"])
+    if not sp or sp[0] not in categories(_root(context)):
         return
-    cat, item = parts[0], f"{parts[0]}/{parts[2]}"
+    cat, item = sp[0], f"{sp[0]}/{sp[1]}"
     try:
         sc.ft_cloth_cat = cat
         sc.ft_cloth_item = item
         sc.ft_cloth_skin = e["da"].replace("\\", "/")
     except TypeError:
         pass
+
+
+# ── attach to the selected character ────────────────────────────────────────
+
+def attach_target(context):
+    """The body armature of the selected character (any part of it) if "Attach to selected character"
+    is on, else None."""
+    if not getattr(context.scene, "ft_cloth_attach", False):
+        return None
+    from . import posing
+    return posing.find_target(context)[0]      # selected objects only
+
+
+def _import_class(context, body):
+    """(class, gender) to import with: the character's own when attaching, else the Options choice."""
+    if body is not None:
+        from . import rigging
+        cls, gender, _m = rigging.character_settings(body, context.scene)
+        return cls, gender
+    return context.scene.ft_char_class, ""
+
+
+def _alive(objs):
+    out = []
+    for o in objs:
+        try:
+            o.name
+        except ReferenceError:        # the piece's own armature, removed by Attach
+            continue
+        out.append(o)
+    return out
+
+
+def _attach(context, body, objs, log):
+    """Bind freshly imported pieces to the character like the Rigging tab's Attach (weights onto the body
+    bones, hats on their bone, shape keys); they then follow its pose / ARP rig."""
+    from . import rigging
+    if body is None or not objs:
+        return
+    rp = context.scene.ft_rig
+    msgs = []
+    rigging.HIP_FOLLOW = rp.hip_follow
+    rigging.attach_pieces(body, _alive(objs), rp.delete_src, msgs.append)
+    if rp.auto_shapekeys:
+        rigging.apply_shape_keys(body, context.scene, msgs.append)
+    for m in msgs:
+        (log.warn if m.startswith("WARNING") else log.info)(m)
+    log.info(f"Attached to {body.name}")
+
+
+class _Gender:
+    def __init__(self, gender):
+        self.g = gender
+
+    def __enter__(self):
+        importer.GENDER_OVERRIDE["value"] = self.g
+
+    def __exit__(self, *a):
+        importer.GENDER_OVERRIDE["value"] = ""
 
 
 # ── operators ────────────────────────────────────────────────────────────────
@@ -373,22 +464,28 @@ class FT_OT_cloth_import(bpy.types.Operator):
             return {"CANCELLED"}
         log = Log()
         sc = context.scene
+        body = attach_target(context)
+        cls, gender = _import_class(context, body)
         try:
-            if os.path.basename(s["path"]).startswith("DA_"):
-                objs = importer.import_item(s["path"], root, log, whole_skin=sc.ft_cloth_whole,
-                                            lod_hint=sc.ft_char_class)
-            else:
-                # lone material skin (MI_*.json): import the item's mesh and apply it
-                it = selected_item(context)
-                mesh = _item_mesh(it["dir"], sc.ft_char_class)
-                if not mesh:
-                    self.report({"ERROR"}, "The item's mesh isn't exported (see the status box)")
-                    return {"CANCELLED"}
-                objs = importer.import_psk(mesh, log)
-                importer.fit_class(objs, mesh, sc.ft_char_class, log)
-                for o in objs:
-                    if o.type == "MESH":
-                        importer.apply_to_object(o, root, s["path"], log)
+            with _Gender(gender):
+                if os.path.basename(s["path"]).startswith("DA_"):
+                    objs = importer.import_item(s["path"], root, log, whole_skin=sc.ft_cloth_whole, lod_hint=cls)
+                else:
+                    # lone material skin (MI_*.json): import the item's mesh and apply it
+                    it = selected_item(context)
+                    mesh = _item_mesh(it["dir"], cls)
+                    if not mesh:
+                        self.report({"ERROR"}, "The item's mesh isn't exported (see the status box)")
+                        return {"CANCELLED"}
+                    objs = importer.import_psk(mesh, log)
+                    importer.fit_class(objs, mesh, cls, log)
+                    for o in objs:
+                        if o.type == "MESH":
+                            importer.apply_to_object(o, root, s["path"], log)
+                    from .rigging import mark_imported
+                    mark_imported(objs)
+            _attach(context, body, objs, log)
+            objs = _alive(objs)
         except RuntimeError as e:
             self.report({"ERROR"}, str(e))
             return {"CANCELLED"}
@@ -445,10 +542,15 @@ class FT_OT_cloth_outfit(bpy.types.Operator):
         log = Log()
         log.info(f"Outfit {library.display_name(e)}: {len(pieces)} piece(s) with meshes")
         objs = []
+        body = attach_target(context)
+        cls, gender = _import_class(context, body)
         try:
-            for p in pieces:
-                objs += importer.import_item(os.path.join(root, p["da"]), root, log,
-                                             whole_skin=sc.ft_cloth_whole, lod_hint=sc.ft_char_class)
+            with _Gender(gender):
+                for p in pieces:
+                    objs += importer.import_item(os.path.join(root, p["da"]), root, log,
+                                                 whole_skin=sc.ft_cloth_whole, lod_hint=cls)
+            _attach(context, body, objs, log)
+            objs = _alive(objs)
         except RuntimeError as err:
             self.report({"ERROR"}, str(err))
             return {"CANCELLED"}
@@ -472,7 +574,10 @@ def _outfit_status(context, lib, e):
 def _draw_options(col, context):
     sc = context.scene
     col.prop(sc, "ft_cloth_whole")
-    col.row().prop(sc, "ft_char_class", expand=True)
+    col.prop(sc, "ft_cloth_attach")
+    row = col.row()
+    row.prop(sc, "ft_char_class", expand=True)
+    row.enabled = attach_target(context) is None      # the character's own class wins
     col.prop(sc, "ft_number", text="Number decals")
     from . import _prefs
     p = _prefs(context)
@@ -511,6 +616,9 @@ def draw(layout, context):
         level, text, groups = status(root, s["path"], sc.ft_char_class)
         ui.draw_status(layout, level, text, groups, export=export_paths(root, s["path"]),
                        what=os.path.basename(s["path"]))
+    body = attach_target(context)
+    if body is not None:
+        layout.label(text=f"Import attaches to {body.name}", icon="LINKED")
     row = layout.row(align=True)
     row.operator(FT_OT_cloth_import.bl_idname, icon="IMPORT")
     row.operator(FT_OT_cloth_apply.bl_idname, icon="MATERIAL")
@@ -531,19 +639,25 @@ def register(root_getter, report):
     S.ft_cloth_cat = EnumProperty(name="Category", items=_cat_items, update=_on_cat,
                                   description="Clothing category (folder under Characters)")
     S.ft_cloth_item = EnumProperty(name="Item", items=_item_items, update=_on_item,
-                                   description="Item (folder under <category>/Assets)")
+                                   description="Item (folder under the category)")
     S.ft_cloth_skin = EnumProperty(name="Skin", items=_skin_items,
                                    description="Skin. Check = exported, i = some textures missing or "
                                                "material files need re-saving, warning = a mesh isn't exported")
     S.ft_cloth_whole = BoolProperty(name="Import whole skin", default=True,
                                     description="Also import the other meshes the skin uses (pins, hoods, …)")
     S.ft_cloth_outfit = StringProperty(options={"SKIP_SAVE"})
+    S.ft_cloth_attach = BoolProperty(
+        name="Attach to selected character", default=True,
+        description="When any part of a character (body, head, clothing, armature) is selected, import the "
+                    "item in its class and gender and bind it to its body right away (like Rigging > Attach): "
+                    "it follows the character's position, pose and Auto-Rig Pro rig")
     search.add_tab("cloth", _find, _pick, "In-game, skin or file name; typos are OK", image=_image)
 
 
 def unregister():
     search.remove_tab("cloth")
-    for p in ("ft_cloth_cat", "ft_cloth_item", "ft_cloth_skin", "ft_cloth_whole", "ft_cloth_outfit"):
+    for p in ("ft_cloth_cat", "ft_cloth_item", "ft_cloth_skin", "ft_cloth_whole", "ft_cloth_outfit",
+              "ft_cloth_attach"):
         delattr(bpy.types.Scene, p)
     for c in reversed(CLASSES):
         bpy.utils.unregister_class(c)

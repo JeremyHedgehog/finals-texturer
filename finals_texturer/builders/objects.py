@@ -137,8 +137,8 @@ def build_atk_canister(ctx):
     cr = ctx.tex(_t(p, "CR"), data=False, packed=True, label="CR (colour, roughness A)")
     noh = ctx.tex(_t(p, "NOH") or _t(p, "NXM"), data=True, packed=True, label="NOH (normal RG, mask B, metal A)")
     crc = cr.outputs["Color"] if cr is not None else (1.0, 1.0, 1.0, 1.0)
-    tint = _col(p.v("ColorTint", (0.5, 0.5, 0.5, 1.0)))
-    sec = _col(p.v("SecondaryColorTint", (0.5, 0.5, 0.5, 1.0)))
+    tint = ctx.param_color("ColorTint", p.v("ColorTint", (0.5, 0.5, 0.5, 1.0)))
+    sec = ctx.param_color("SecondaryColorTint", p.v("SecondaryColorTint", (0.5, 0.5, 0.5, 1.0)))
     a_col = nb.mix(nb.mix(crc, sec, 1.0, "MULTIPLY"), (2.0, 2.0, 2.0, 1.0), 1.0, "MULTIPLY", label="2·CR·SecondaryColorTint")
     b_col = nb.mix(nb.mix(crc, tint, 1.0, "MULTIPLY"), (2.0, 2.0, 2.0, 1.0), 1.0, "MULTIPLY", label="2·CR·ColorTint")
     if noh is not None:
@@ -152,7 +152,8 @@ def build_atk_canister(ctx):
     emission = None
     em = p.s("EmissiveMultiply", 0.0)
     if em:
-        emission = nb.mix(color, (em,) * 3 + (1.0,), 1.0, "MULTIPLY")
+        emv = ctx.param_value("EmissiveMultiply", em)
+        emission = nb.mix(color, nb.combine(emv, emv, emv), 1.0, "MULTIPLY")
         emission = nb.mix((0, 0, 0, 1), emission, mask, label="EmissiveMultiply × B")
     dpath = _t(p, "DecalCR")
     decal = _atlas_decal(ctx, dpath) if dpath else None
@@ -189,7 +190,8 @@ def build_cashout_prop(ctx):
     crc = cr.outputs["Color"] if cr is not None else (0.5, 0.5, 0.5, 1.0)
     color = crc
     if p.sw("UseColorTint", True):
-        color = _overlay(nb, crc, _col(p.v("ColorTint", (0.5, 0.5, 0.5, 1.0))), label="Overlay ColorTint")
+        color = _overlay(nb, crc, ctx.param_color("ColorTint", p.v("ColorTint", (0.5, 0.5, 0.5, 1.0))),
+                         label="Overlay ColorTint")
     rough = cr.outputs["Alpha"] if cr is not None else 0.5
     metal = nm.outputs["Alpha"] if nm is not None else 0.0
     if not station:

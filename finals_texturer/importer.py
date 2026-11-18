@@ -131,7 +131,12 @@ def find_part_file(finder, object_path, lod_hint=""):
     return ""
 
 
+GENDER_OVERRIDE = {"value": ""}     # set while importing onto a character (its own gender wins)
+
+
 def _gender():
+    if GENDER_OVERRIDE["value"]:
+        return GENDER_OVERRIDE["value"]
     g = getattr(bpy.context.scene, "ft_char_gender", "MALE") if bpy.context.scene else "MALE"
     return "female" if str(g).lower().startswith("f") else "male"
 
@@ -471,6 +476,8 @@ def import_item(skin_path, root, log, whole_skin=True, lod_hint=""):
             apply_to_object(o, root, skin_path, log, tags=tags)
     if whole_skin and main is not None:
         objs += import_skin_parts(main, root, skin_path, log, cls=lod_hint or None)
+    from .rigging import mark_imported
+    mark_imported(objs)
     return objs
 
 

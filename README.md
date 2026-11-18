@@ -28,6 +28,7 @@ against them, so items look the way they do in the store, not like flat texture 
   - [Objects tab](#objects-tab)
   - [Posing tab](#posing-tab)
   - [Rigging tab](#rigging-tab)
+  - [Tweaking materials](#tweaking-materials)
 - [Preferences](#preferences)
 - [Troubleshooting](#troubleshooting)
 - [Known limitations](#known-limitations)
@@ -151,6 +152,10 @@ names) into your FModel Export Folder. FModel doesn't have to be open.
 - Pick **category → item → skin**, or search. Outfits import every piece at once with **Import Outfit**.
 - **Import** fits the item to the body class you chose. Items made for another class are scaled the way the
   game does it, and hats sit on the head.
+- **Attach to selected character** (Options, on by default): select any part of a character (body, head,
+  clothing or its rig) and **Import** puts the item straight on it, in that character's class and gender,
+  bound like Rigging's Attach. It follows the character wherever it stands, its pose and its Auto-Rig Pro
+  rig. Works before and after Simplify.
 - **Apply to Selected** puts the chosen skin's materials on items you already imported.
 - **Number decals** (jerseys etc.): the game sets the number per player, so you choose it in the panel.
 
@@ -190,9 +195,32 @@ Based on zebby's rig tools.
 
 1. **Simplify Body Rig** merges the game's helper bones (twist, corrective) into a clean skeleton.
 2. **Attach Selected Pieces** binds imported clothing to that skeleton. Hats and other socket items follow
-   their bone.
+   their bone. Pieces you haven't moved since importing land on the character even if it's moved or posed.
+
+The **Body Rig** and **ARP Rig** fields take any part of the character (body, head, clothing or an armature)
+and pick the right armature for you.
 3. **Generate ARP Control Rig** (needs Auto-Rig Pro) builds animation controls that drive the simplified
    skeleton.
+
+### Tweaking materials
+
+Every material's node graph is sorted into labelled frames (textures, each layer, decals, normals…). Two
+frames at the top are meant for you:
+
+- **Adjust (tweak here)**: the green frame next to the shader holds the **FT Adjust** node. Its knobs leave
+  the material unchanged at their defaults:
+  - *Colour*: hue, saturation, brightness, tint.
+  - *Surface*: roughness multiply / offset, metallic offset, normal strength.
+  - *Glow*: raise **Glow Strength** to make the item glow. By default the whole surface glows in its own
+    colour. Set **Glow Everywhere** to 0 and use **Glow Area 1–4** to light up only some parts (clothing:
+    the ColorA / B / C paint areas; weapons: layers 1–4), **Glow Decals** for decals and weapon graphics,
+    or **Glow Bright Parts** for everything above a brightness.
+  - *Opacity*: fade the item out.
+- **Parameters (game values)**: the blue frame holds the game's own colours as named colour nodes
+  (clothing ColorA / B / C and their scheme-2 versions, decal colours; weapon layer colours; skin tone;
+  object tints; emissive strengths). Changing one recolours the item the way the game would.
+
+Re-importing or Apply rebuilds the material and resets these values.
 
 ---
 

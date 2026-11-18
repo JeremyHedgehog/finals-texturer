@@ -17,6 +17,11 @@ NEUTRAL = {
 }
 
 
+PARAMS = "Parameters (game values)"
+ADJUST_SECTION = "Adjust (tweak here)"
+ADJUST_NODE = "FT Adjust"
+
+
 class Ctx:
     """Everything one material build needs."""
 
@@ -42,18 +47,55 @@ class Ctx:
         self._scaled = {}
         self._tex = {}
         self._missing = set()
+        self._params = {}
+        self.areas = {}                 # glow areas: {1..4: mask socket} (see groups.adjust)
+        self.decal_masks = []           # decal / graphic coverage sockets
+        self.nb.section("Material")
+
+    # ── frames, exposed parameters, glow masks ───────────────────────────────
+    def section(self, name):
+        """Nodes made from now on go in the frame `name` (returns the previous one)."""
+        return self.nb.section(name)
+
+    def _param(self, kind, label, value):
+        key = (kind, label)
+        if key not in self._params:
+            prev = self.nb.section(PARAMS)
+            if kind == "RGB":
+                self._params[key] = self.nb.rgb(_col(value), label=label)
+            else:
+                self._params[key] = self.nb.value(value, label=label)
+            self._params[key].node.name = "FT " + label
+            self.nb.section(prev)
+        return self._params[key]
+
+    def param_color(self, label, value):
+        """A game colour as a named RGB node in the Parameters frame (one per label):
+        editing it changes the material the way the game's parameter would."""
+        return self._param("RGB", label, value)
+
+    def param_value(self, label, value):
+        return self._param("VALUE", label, float(value))
+
+    def add_decal_mask(self, alpha):
+        if alpha is not None and _is_socket(alpha):
+            self.decal_masks.append(alpha)
 
     # ── UVs ──────────────────────────────────────────────────────────────────
     def uv(self, scale=1.0, detail=False):
         if detail and self.detail_uv:
             if self._duv is None:
+                prev = self.nb.section("UV maps")
                 n = self.nb.node("ShaderNodeUVMap", "Detail UV (2nd channel)")
+                self.nb.section(prev)
                 n.uv_map = self.detail_uv
                 self._duv = n.outputs["UV"]
             base = self._duv
         else:
             if self._uv is None:
+                prev = self.nb.section("UV maps")
                 self._uv = self.nb.node("ShaderNodeTexCoord").outputs["UV"]
+                self.nb.section(prev)
             base = self._uv
         scale = round(float(scale), 5)
         if scale == 1.0:
@@ -267,7 +309,46 @@ class Ctx:
         # reversed faces, and culling would hide their outside.
         m.use_backface_culling = False
         m["ft_two_sided"] = bool(two_sided)
+        self._insert_adjust()
         self.nb.layout()
+
+    def _insert_adjust(self):
+        """Put the shared FT Adjust group between the material and every Principled BSDF:
+        the material's values go into its (folded) Material panel, its outputs into the BSDF."""
+        nb, links = self.nb, self.mat.node_tree.links
+        bsdfs = [n for n in self.mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED"]
+        if not bsdfs:
+            return
+        prev = nb.section(ADJUST_SECTION)
+        group = groups.adjust()
+        decals = None
+        for d in self.decal_masks:
+            decals = d if decals is None else nb.math("MAXIMUM", decals, d)
+        for b in bsdfs:
+            if b.get("ft_adjusted"):
+                continue
+            g = nb.group(group, label="Adjust (colour / surface / glow / opacity)")
+            g.name = ADJUST_NODE if len(bsdfs) == 1 else ADJUST_NODE + " " + b.name
+            g.width = 260
+            for name in groups.ADJUST_PASS:
+                dst = b.inputs[name]
+                if dst.is_linked:
+                    src = dst.links[0].from_socket
+                    links.remove(dst.links[0])
+                    links.new(src, g.inputs[name])
+                elif name != "Normal":
+                    g.inputs[name].default_value = dst.default_value
+                links.new(g.outputs[name], dst)
+            for k, sock in self.areas.items():
+                if 1 <= k <= groups.AREAS and sock is not None:
+                    nb.feed(g.inputs[f"Area {k}"], sock)
+            if decals is not None:
+                nb.feed(g.inputs["Decals"], decals)
+            b["ft_adjusted"] = True
+            # the BSDF and the output sit with the Adjust node
+            for n in [b] + [l.to_node for l in b.outputs[0].links]:
+                nb._section[n.as_pointer()] = ADJUST_SECTION
+        nb.section(prev)
 
 
 def _col(v, a=None):

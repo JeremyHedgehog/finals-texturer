@@ -8,7 +8,7 @@ import bpy
 
 from .nodes import NodeBuilder, new_group, add_socket
 
-VERSION = 13
+VERSION = 14
 _TAG = "ft_group_version"
 
 
@@ -277,3 +277,108 @@ def lace_fade():
         op = nb.lerp(1.0, nb.clamp01(i["Min Transparency"]), f)
         nb.feed(o["Opacity"], nb.mul(op, i["Transparency"], clamp=True))
     return _get("FT Lace Fade", build)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Adjust: the knobs in front of every material's shader (common.Ctx.finish).
+# All defaults leave the material exactly as built.
+# ─────────────────────────────────────────────────────────────────────────────
+
+ADJUST = "FT Adjust"
+# BSDF inputs that run through the group (same names on its inputs and outputs)
+ADJUST_PASS = ("Base Color", "Roughness", "Metallic", "Normal", "Alpha", "Emission Color", "Emission Strength")
+AREAS = 4
+
+
+def adjust():
+    """Colour (hue / saturation / brightness / tint), surface (roughness, metal,
+    normal strength), glow (strength, colour; where: everywhere, paint areas 1-4,
+    decals, bright parts) and opacity, between a material and its Principled BSDF.
+    The "Material" panel is wired by the add-on; the other panels are for you."""
+    def build(ng):
+        itf = ng.interface
+        for n, kind in (("Base Color", "COLOR"), ("Roughness", "FLOAT"), ("Metallic", "FLOAT"),
+                        ("Normal", "VECTOR"), ("Alpha", "FLOAT"), ("Emission Color", "COLOR"),
+                        ("Emission Strength", "FLOAT")):
+            add_socket(ng, n, kind, "OUTPUT")
+        wired = itf.new_panel("Material (wired by the add-on)", default_closed=True)
+        add_socket(ng, "Base Color", "COLOR", default=(0.8, 0.8, 0.8), panel=wired)
+        add_socket(ng, "Roughness", "FLOAT", default=0.5, lo=0, hi=1, panel=wired)
+        add_socket(ng, "Metallic", "FLOAT", default=0.0, lo=0, hi=1, panel=wired)
+        add_socket(ng, "Normal", "VECTOR", default=(0.0, 0.0, 0.0), panel=wired,
+                   desc="Shading normal from the material; unconnected = the mesh normal")
+        add_socket(ng, "Alpha", "FLOAT", default=1.0, lo=0, hi=1, panel=wired)
+        add_socket(ng, "Emission Color", "COLOR", default=(1, 1, 1), panel=wired)
+        add_socket(ng, "Emission Strength", "FLOAT", default=0.0, lo=0, panel=wired)
+        for k in range(1, AREAS + 1):
+            add_socket(ng, f"Area {k}", "FLOAT", default=0.0, lo=0, hi=1, panel=wired,
+                       desc="Paint area mask: clothing ColorA / B / C areas (1-3), weapon layers 1-4")
+        add_socket(ng, "Decals", "FLOAT", default=0.0, lo=0, hi=1, panel=wired,
+                   desc="Where decals / graphics are")
+
+        pc = itf.new_panel("Colour")
+        add_socket(ng, "Hue", "FLOAT", default=0.5, lo=0, hi=1, panel=pc, desc="0.5 = unchanged")
+        add_socket(ng, "Saturation", "FLOAT", default=1.0, lo=0, hi=2, panel=pc)
+        add_socket(ng, "Brightness", "FLOAT", default=1.0, lo=0, hi=4, panel=pc)
+        add_socket(ng, "Tint", "COLOR", default=(1, 1, 1), panel=pc, desc="Multiplies the colour")
+        ps = itf.new_panel("Surface")
+        add_socket(ng, "Roughness Multiply", "FLOAT", default=1.0, lo=0, hi=4, panel=ps)
+        add_socket(ng, "Roughness Offset", "FLOAT", default=0.0, lo=-1, hi=1, panel=ps)
+        add_socket(ng, "Metallic Offset", "FLOAT", default=0.0, lo=-1, hi=1, panel=ps)
+        add_socket(ng, "Normal Strength", "FLOAT", default=1.0, lo=0, hi=2, panel=ps, desc="0 = flat")
+        pg = itf.new_panel("Glow")
+        add_socket(ng, "Glow Strength", "FLOAT", default=0.0, lo=0, hi=100, panel=pg, desc="0 = off")
+        add_socket(ng, "Glow Color", "COLOR", default=(1, 1, 1), panel=pg)
+        add_socket(ng, "Glow Uses Base Color", "FLOAT", default=1.0, lo=0, hi=1, panel=pg,
+                   desc="1 = glow in the surface's own colour (x Glow Color), 0 = Glow Color only")
+        add_socket(ng, "Glow Everywhere", "FLOAT", default=1.0, lo=0, hi=1, panel=pg,
+                   desc="Set to 0 to glow only where the options below say")
+        for k in range(1, AREAS + 1):
+            add_socket(ng, f"Glow Area {k}", "FLOAT", default=0.0, lo=0, hi=1, panel=pg,
+                       desc="Clothing: area 1-3 = ColorA / B / C paint. Weapons: layer 1-4")
+        add_socket(ng, "Glow Decals", "FLOAT", default=0.0, lo=0, hi=1, panel=pg)
+        add_socket(ng, "Glow Bright Parts", "FLOAT", default=0.0, lo=0, hi=1, panel=pg)
+        add_socket(ng, "Bright Threshold", "FLOAT", default=0.5, lo=0, hi=1, panel=pg,
+                   desc="Brightness above which Glow Bright Parts lights up")
+        po = itf.new_panel("Opacity")
+        add_socket(ng, "Opacity", "FLOAT", default=1.0, lo=0, hi=1, panel=po)
+
+        nb, i, o = _io(ng)
+        # colour
+        hsv = nb.node("ShaderNodeHueSaturation")
+        nb.feed(hsv.inputs["Hue"], i["Hue"])
+        nb.feed(hsv.inputs["Saturation"], i["Saturation"])
+        nb.feed(hsv.inputs["Value"], i["Brightness"])
+        nb.feed(hsv.inputs["Fac"], 1.0)
+        nb.feed(hsv.inputs["Color"], i["Base Color"])
+        color = nb.mix(hsv.outputs[0], i["Tint"], 1.0, "MULTIPLY")
+        nb.feed(o["Base Color"], color)
+        # surface
+        nb.feed(o["Roughness"], nb.math("MULTIPLY_ADD", i["Roughness"], i["Roughness Multiply"],
+                                        i["Roughness Offset"], clamp=True))
+        nb.feed(o["Metallic"], nb.math("ADD", i["Metallic"], i["Metallic Offset"], clamp=True))
+        geo = nb.node("ShaderNodeNewGeometry")
+        has_n = nb.math("GREATER_THAN", nb.vmath("LENGTH", i["Normal"]), 0.5)
+        g = geo.outputs["Normal"]
+        # no normal wired (length 0) -> the mesh normal; then g + (n - g) x strength
+        n_in = nb.vmath("MULTIPLY_ADD", nb.vmath("SUBTRACT", i["Normal"], g), nb.combine(has_n, has_n, has_n), c=g)
+        n_out = nb.vmath("NORMALIZE", nb.vmath("MULTIPLY_ADD", nb.vmath("SUBTRACT", n_in, g),
+                                               nb.combine(i["Normal Strength"], i["Normal Strength"],
+                                                          i["Normal Strength"]), c=g))
+        nb.feed(o["Normal"], n_out)
+        # glow mask
+        m = i["Glow Everywhere"]
+        for k in range(1, AREAS + 1):
+            m = nb.math("MULTIPLY_ADD", i[f"Area {k}"], i[f"Glow Area {k}"], m)
+        m = nb.math("MULTIPLY_ADD", i["Decals"], i["Glow Decals"], m)
+        lum = nb.node("ShaderNodeRGBToBW")
+        nb.feed(lum.inputs[0], color)
+        bright = nb.map_range(lum.outputs[0], nb.sub(i["Bright Threshold"], 0.05), nb.add(i["Bright Threshold"], 0.05))
+        m = nb.math("MULTIPLY_ADD", bright, i["Glow Bright Parts"], m, clamp=True)
+        gcol = nb.mix(i["Glow Color"], nb.mix(color, i["Glow Color"], 1.0, "MULTIPLY"), i["Glow Uses Base Color"])
+        glow = nb.vmath("SCALE", gcol, scale=nb.mul(m, i["Glow Strength"]))
+        own = nb.vmath("SCALE", i["Emission Color"], scale=i["Emission Strength"])
+        nb.feed(o["Emission Color"], nb.vmath("ADD", own, glow))
+        nb.feed(o["Emission Strength"], 1.0)
+        nb.feed(o["Alpha"], nb.mul(i["Alpha"], i["Opacity"], clamp=True))
+    return _get(ADJUST, build)

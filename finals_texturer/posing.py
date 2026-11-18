@@ -171,25 +171,49 @@ def _armature_of(obj):
     return None
 
 
+def _is_char_body(arm):
+    """A character's body armature: stamped "body" by the Character tab, else any body-shaped skeleton that
+    isn't a clothing item's own game skeleton (a jacket's has pelvis and hands too) or a head's rig."""
+    if arm is None or arm.type != "ARMATURE":
+        return False
+    if arm.get("ft_char_role") == "body":
+        return True
+    if arm.get("ft_outfit_skin") or arm.get("ft_char_role") in ("head", "extra"):
+        return False
+    return is_body(arm)
+
+
+def target_of(obj):
+    """(body armature, ARP rig or None) of one object: the body itself, any mesh or head bound to it, a
+    piece or weapon bone-parented to it, or the ARP rig driving it. (None, None) if it isn't part of one."""
+    arm = _armature_of(obj)
+    if arm is None:
+        return None, None
+    if is_arp(arm):
+        for o in bpy.data.objects:
+            if is_body(o) and driving_rig(o) == arm:
+                return o, arm
+        return None, None
+    if obj.parent_type == "BONE" and _is_char_body(obj.parent):
+        arm = obj.parent                             # weapon on the hand, hat on the head bone
+    seen = set()
+    while not _is_char_body(arm) and arm.parent is not None and arm.parent.type == "ARMATURE"             and arm.name not in seen:
+        seen.add(arm.name)
+        arm = arm.parent                             # head armature -> body it follows
+    if _is_char_body(arm):
+        return arm, driving_rig(arm)
+    return None, None
+
+
 def find_target(context):
-    """(body armature, ARP rig or None) for the active / selected object: the body itself, any mesh or
-    head bound to it, a weapon attached to its hand, or the ARP rig driving it."""
-    cands = [context.active_object] + [o for o in context.selected_objects if o != context.active_object]
-    for obj in cands:
-        arm = _armature_of(obj)
-        if arm is None:
-            continue
-        if is_arp(arm):
-            for o in bpy.data.objects:
-                if is_body(o) and driving_rig(o) == arm:
-                    return o, arm
-            continue
-        while arm.parent is not None and arm.parent.type == "ARMATURE" and not is_body(arm):
-            arm = arm.parent                         # head armature -> body it follows
-        if obj.parent_type == "BONE" and is_body(obj.parent):
-            arm = obj.parent                         # weapon on the hand
-        if is_body(arm):
-            return arm, driving_rig(arm)
+    """(body armature, ARP rig or None) for the active / selected object (see target_of)."""
+    # only what is really selected: Blender keeps the last clicked object active after "select none"
+    sel = list(context.selected_objects)
+    act = context.active_object
+    for obj in ([act] if act in sel else []) + [o for o in sel if o != act]:
+        body, rig = target_of(obj)
+        if body is not None:
+            return body, rig
     return None, None
 
 

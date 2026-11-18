@@ -193,8 +193,9 @@ def _layer(ctx, k, ch, graphic=None):
     if s("AddEdgeWearToIndex(B)", 0.0) >= 0.5 and edge is not None:
         index = nb.lerp(index, s("IndexEdgeWearInfluence", 1.0), edge)
 
-    color = _lerp3(nb, _col(p.v(f"{k}_Color_A", (0, 0, 0, 1))), _col(p.v(f"{k}_Color_B", (0.5, 0.5, 0.5, 1))),
-                   _col(p.v(f"{k}_Color_C", (1, 1, 1, 1))), index, f"Layer {k} colour")
+    color = _lerp3(nb, ctx.param_color(f"{k}_Color_A", p.v(f"{k}_Color_A", (0, 0, 0, 1))),
+                   ctx.param_color(f"{k}_Color_B", p.v(f"{k}_Color_B", (0.5, 0.5, 0.5, 1))),
+                   ctx.param_color(f"{k}_Color_C", p.v(f"{k}_Color_C", (1, 1, 1, 1))), index, f"Layer {k} colour")
     fake = s("UseFakeColorVariation(B)", 0.0)
     if fake and var is not None:
         amt = min(max(s("FakeColorVariationAmount", 0.15), 0.0), 0.25)
@@ -303,6 +304,7 @@ def _blend(nb, a, b, mask, colour=False, label=None):
 def build_weapon(ctx, fx=False):
     p, nb = ctx.p, ctx.nb
     bsdf = ctx.bsdf()
+    ctx.section("Textures")
     nwo_path = _tex_ok(p, "NWO")
     nwo = ctx.tex(nwo_path, data=True, packed=True, label="NWO (normal RG, wear B, variation A)") if nwo_path else None
     ch = _channels(ctx, nwo)
@@ -310,10 +312,14 @@ def build_weapon(ctx, fx=False):
     ids_path = _tex_ok(p, "Masks")
     ids = ctx.tex(ids_path, data=True, packed=True, label="ID masks (layers 1-4)") if ids_path else None
 
+    ctx.section("Graphic")
     graphic = _graphic(ctx)
+    if graphic is not None and not isinstance(graphic[1], float):
+        ctx.add_decal_mask(graphic[1])
     if graphic is not None:
         idw = _id_graphic_weight(ctx, ids) if (p.sw("UseIDMask") and ids is not None) else None
         graphic = (graphic[0], graphic[1], idw)
+    ctx.section("Layer 0 (base)")
     if fx and not _tex_ok(p, "0_IndexMap") and not p.has_any("0_Color_A", "0_Roughness_A"):
         color, rough, metal, coat = _fx_base(ctx)
         color = _apply_graphic(ctx, 0, color, graphic)
@@ -324,13 +330,16 @@ def build_weapon(ctx, fx=False):
     for k in range(1, 5):
         if not p.sw(f"{k}_UseBlend") or ids is None:
             continue
+        ctx.section(f"Layer {k}")
         mask = _layer_mask(ctx, k, ids, edge)
+        ctx.areas[k] = mask
         L = _layer(ctx, k, ch, graphic)
         color = _blend(nb, color, L["color"], mask, colour=True, label=f"Layer {k}")
         rough = _blend(nb, rough, L["rough"], mask)
         metal = _blend(nb, metal, L["metal"], mask)
         coat = _blend(nb, coat, L["coat"], mask)
 
+    ctx.section("Curvature & normals")
     # curvature "pop" (only when a real curvature texture is set; 50 % grey = none)
     curv_path = _tex_ok(p, "Curvature")
     curv = ctx.tex(curv_path, data=True, label="Curvature") if curv_path else None
@@ -360,12 +369,14 @@ def build_weapon(ctx, fx=False):
             nb.feed(bsdf.inputs["Normal"], ctx.normal_map(rg.outputs[0]))
         else:
             nb.feed(bsdf.inputs["Normal"], _packed_normal(ctx, nwo)[0])
+    ctx.section("Glow / effects")
     if graphic is not None and p.s("UseGraphicAsEmissive", 0.0) > 0.0:
         # glowing graphic (layer 0's weight; the game blends the weights by the layer masks)
         gcol, ga, _idw = graphic
         nb.feed(bsdf.inputs["Emission Color"], nb.mix((0, 0, 0, 1), gcol, nb.mul(ga, p.s("00_GraphicWeight", 1.0))
                                                       if not isinstance(ga, float) else p.s("00_GraphicWeight", 1.0)))
-        nb.feed(bsdf.inputs["Emission Strength"], max(p.s("GraphicEmissiveIntensity", 1.0), 0.0))
+        nb.feed(bsdf.inputs["Emission Strength"],
+                ctx.param_value("GraphicEmissiveIntensity", max(p.s("GraphicEmissiveIntensity", 1.0), 0.0)))
     if fx:
         color = _fx_extras(ctx, bsdf, color)
     nb.feed(bsdf.inputs["Base Color"], color)
@@ -389,7 +400,8 @@ def build_weapon_preset(ctx):
     cr = ctx.tex(_tex_ok(p, "CR"), data=False, packed=True, vector=tiling, label="CR (colour, roughness A)")
     nom = ctx.tex(_tex_ok(p, "NOM"), data=True, packed=True, vector=tiling, label="NOM (normal RG, B, metal A)")
     color = cr.outputs["Color"] if cr is not None else (0.5, 0.5, 0.5, 1.0)
-    color = nb.mix(color, _col(p.v("ColorMultiply", (1, 1, 1, 1))), 1.0, "MULTIPLY", label="ColorMultiply")
+    color = nb.mix(color, ctx.param_color("ColorMultiply", p.v("ColorMultiply", (1, 1, 1, 1))), 1.0, "MULTIPLY",
+                   label="ColorMultiply")
     if cr is not None:
         nb.feed(bsdf.inputs["Roughness"], cr.outputs["Alpha"])
     if nom is not None:
@@ -401,9 +413,10 @@ def build_weapon_preset(ctx):
         elif p.sw("Use NEM"):
             # NEM: blue is an emissive mask, not occlusion (as AO it blacked
             # out the Ceremonial Saber / Plasma Katana skins)
-            em = _col(p.v("Emissive Color A", (1, 1, 1, 1)))
+            em = ctx.param_color("Emissive Color A", p.v("Emissive Color A", (1, 1, 1, 1)))
             nb.feed(bsdf.inputs["Emission Color"], nb.mix((0, 0, 0, 1), em, blue, label="Emissive (NEM blue)"))
-            nb.feed(bsdf.inputs["Emission Strength"], max(p.s("Emissive Intensity", 1.0), 0.0))
+            nb.feed(bsdf.inputs["Emission Strength"],
+                    ctx.param_value("Emissive Intensity", max(p.s("Emissive Intensity", 1.0), 0.0)))
         elif p.sw("UseBlueAsAO", True):
             color = nb.mix(color, nb.combine(blue, blue, blue), 1.0, "MULTIPLY", label="Occlusion (NOM B)")
     nb.feed(bsdf.inputs["Base Color"], color)
@@ -475,7 +488,7 @@ def _fx_extras(ctx, bsdf, color):
         if name in p.vectors:
             em = _col(p.v(name, (0, 0, 0, 1)))
             if max(em[:3]) > 0.0:
-                nb.feed(bsdf.inputs["Emission Color"], em)
+                nb.feed(bsdf.inputs["Emission Color"], ctx.param_color(name, em))
                 nb.feed(bsdf.inputs["Emission Strength"], 0.5)
                 break
     return color

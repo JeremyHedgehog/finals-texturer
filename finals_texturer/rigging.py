@@ -218,7 +218,7 @@ def body_from_context(ctx):
     if body is not None:
         return body
     a = ctx.active_object
-    return a if a is not None and a.type == "ARMATURE" and not is_follower(a) else None
+    return a if a is not None and a.select_get() and a.type == "ARMATURE" and not is_follower(a) else None
 
 
 def simplify_armature(arm_obj, tidy_orientation=True, report=print):
@@ -388,6 +388,26 @@ def rest_mismatch(src_arm, master):
     return worst, worst_name
 
 
+IMPORT_MATRIX = "ft_import_matrix"
+
+
+def _unmoved(obj):
+    """True if a piece is still exactly where the import put it (game rest pose at the world origin), so
+    attaching may move it onto the character. Pieces the user placed by hand keep their place."""
+    m = obj.get(IMPORT_MATRIX)
+    if m is None:
+        return False
+    cur = [v for row in obj.matrix_world for v in row]
+    return len(m) == 16 and all(abs(a - b) < 1e-4 for a, b in zip(m, cur))
+
+
+def mark_imported(objs):
+    """Remember where freshly imported pieces sit (see _unmoved)."""
+    for o in objs:
+        if o.type == "MESH":
+            o[IMPORT_MATRIX] = [v for row in o.matrix_world for v in row]
+
+
 def attach_pieces(master, objects, delete_source_armatures=True, report=print):
     _ensure_object_mode()
     master_names = {b.name for b in master.data.bones}
@@ -413,6 +433,16 @@ def attach_pieces(master, objects, delete_source_armatures=True, report=print):
                                 "doesn't have; parent it by hand")
                 continue
             mw = me.matrix_world.copy()
+            if _unmoved(me):
+                # still where the import put it (game rest, at the origin): onto the bone as it is now
+                # (character moved / posed / driven by ARP)
+                pb, bone = master.pose.bones[socket], master.data.bones[socket]
+                mw = master.matrix_world @ pb.matrix @ bone.matrix_local.inverted() @ mw
+            for m in [m for m in me.modifiers if m.type == "ARMATURE"]:
+                if m.object is None or len(m.object.data.bones) <= 1:
+                    if m.object is not None:
+                        src_arms.add(m.object)       # its one-bone game armature: removed below
+                    me.modifiers.remove(m)           # rigid piece: the bone parent moves it
             me.parent = master
             me.parent_type = "BONE"
             me.parent_bone = socket
@@ -420,6 +450,7 @@ def attach_pieces(master, objects, delete_source_armatures=True, report=print):
             me.matrix_world = mw
             done += 1
             attached.append(me)
+            me.pop(IMPORT_MATRIX, None)
             continue
         src = source_armature_of(me)
         if src == master:
@@ -442,6 +473,8 @@ def attach_pieces(master, objects, delete_source_armatures=True, report=print):
         merge_vertex_groups(me, nmap)
 
         mw = me.matrix_world.copy()
+        if _unmoved(me):
+            mw = master.matrix_world @ mw    # imported at the origin: follow a moved character
         mods = [m for m in me.modifiers if m.type == "ARMATURE"]
         if not mods:
             mods = [me.modifiers.new("Armature", "ARMATURE")]
@@ -458,6 +491,7 @@ def attach_pieces(master, objects, delete_source_armatures=True, report=print):
         me.matrix_world = mw
         done += 1
         attached.append(me)
+        me.pop(IMPORT_MATRIX, None)
         if unresolved:
             warnings.append(f"{me.name}: untouched non-bone groups {unresolved}")
 
@@ -699,14 +733,46 @@ def _reapply_pose(arm_obj, report):
 #  UI (drawn by the Finals panel when the Rigging tab is active)
 # ---------------------------------------------------------------------------
 
+def _pick_body(o):
+    """The body armature a picked object belongs to (body, head, clothing, its armatures, ARP rig…)."""
+    from . import posing
+    body, _rig = posing.target_of(o)
+    if body is None and o.type == "ARMATURE" and not is_follower(o) and not posing.is_arp(o):
+        body = o                     # a game skeleton imported by other means
+    return body
+
+
+def _pick_rig(o):
+    from . import posing
+    return posing.target_of(o)[1]
+
+
+def _on_master(self, context):
+    o = self.master
+    body = _pick_body(o) if o is not None else None
+    if o is not None and body is not None and body != o:
+        self.master = body           # runs this update again with the armature (no change then)
+
+
+def _on_arp(self, context):
+    o = self.arp_rig
+    rig = _pick_rig(o) if o is not None else None
+    if o is not None and rig is not None and rig != o:
+        self.arp_rig = rig
+
+
 class FT_RigProps(bpy.types.PropertyGroup):
     master: bpy.props.PointerProperty(
         type=bpy.types.Object, name="Body Rig",
-        poll=lambda self, o: o.type == "ARMATURE",
-        description="Simplified body skeleton that every piece is bound to")
+        poll=lambda self, o: o.type in ("ARMATURE", "MESH") and _pick_body(o) is not None,
+        update=_on_master,
+        description="Body skeleton every piece is bound to. Pick any part of the character (body, head, "
+                    "clothing or an armature): the body's armature is chosen for you")
     arp_rig: bpy.props.PointerProperty(
         type=bpy.types.Object, name="ARP Rig",
-        poll=lambda self, o: o.type == "ARMATURE")
+        poll=lambda self, o: o.type in ("ARMATURE", "MESH") and _pick_rig(o) is not None,
+        update=_on_arp,
+        description="Auto-Rig Pro rig driving the body. Pick it or any part of the character")
     hip_follow: bpy.props.FloatProperty(
         name="Hip Follows Thigh", default=0.5, min=0.0, max=1.0, subtype="FACTOR",
         description="How much of the hip-crease corrective weights move with the thigh "

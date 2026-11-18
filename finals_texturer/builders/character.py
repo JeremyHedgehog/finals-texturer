@@ -27,7 +27,7 @@ def build_skin(ctx):
         return nb.mix(b.outputs["Color"], h.outputs["Color"], hands, label=label)
 
     color = pick("BodyColorMap", "HandsColorMap", False, "Body / hands colour")
-    tint = _col(p.v("ColorMultiply", (1, 1, 1, 1)))
+    tint = ctx.param_color("ColorMultiply (skin tone)", p.v("ColorMultiply", (1, 1, 1, 1)))
     # SkinDesaturation greys the skin texture, then ColorMultiply tints it
     # (the other way round, green/blue skins like Face_21/17 came out grey).
     desat = max(0.0, min(1.0, p.s("SkinDesaturation", 0.0)))
@@ -322,11 +322,12 @@ def build_glitter(ctx):
     # with distance (user: "a bit more glossy" between the flakes)
     nb.feed(bsdf.inputs["Roughness"], nb.math("MULTIPLY_ADD", m, -0.11, 0.12))
     t = nb.mul(seed, 3.0)
-    pal = nb.mix(_col(p.v("ColorA", (0.001, 0.001, 0.01, 1))), _col(p.v("ColorB", (0.074, 0.017, 0.15, 1))),
+    pal = nb.mix(ctx.param_color("ColorA", p.v("ColorA", (0.001, 0.001, 0.01, 1))),
+                 ctx.param_color("ColorB", p.v("ColorB", (0.074, 0.017, 0.15, 1))),
                  nb.clamp01(t), label="ColorA → B")
-    pal = nb.mix(pal, _col(p.v("ColorC", (0.037, 0.127, 0.426, 1))), nb.clamp01(nb.sub(t, 1.0)), label="→ C")
-    pal = nb.mix(pal, _col(p.v("ColorD", (1.778, 1.271, 2.0, 1))), nb.clamp01(nb.sub(t, 2.0)), label="→ D")
-    em = nb.vmath("SCALE", pal, scale=nb.mul(m, max(p.s("EmissiveIntensity", 5.0), 0.0)), label="Flake emission")
+    pal = nb.mix(pal, ctx.param_color("ColorC", p.v("ColorC", (0.037, 0.127, 0.426, 1))), nb.clamp01(nb.sub(t, 1.0)), label="→ C")
+    pal = nb.mix(pal, ctx.param_color("ColorD", p.v("ColorD", (1.778, 1.271, 2.0, 1))), nb.clamp01(nb.sub(t, 2.0)), label="→ D")
+    em = nb.vmath("SCALE", pal, scale=nb.mul(m, ctx.param_value("EmissiveIntensity", max(p.s("EmissiveIntensity", 5.0), 0.0))), label="Flake emission")
     # rim: min((2.5 x (1 - N.V)^0.53 x f)^64 x 100, 1) x upward-facing, f = 1 - N.V
     ndv = nb.sub(1.0, x)
     f = nb.mul(nb.mul(x, nb.math("POWER", ndv, 0.53)), 2.5)

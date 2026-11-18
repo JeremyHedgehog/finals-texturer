@@ -81,6 +81,31 @@ def draw_preview(layout, path, scale=7.0):
 
 # ── status box ───────────────────────────────────────────────────────────────
 
+ITEM_SUBFOLDERS = ("Skins", "Textures", "Materials", "Meshes")
+
+
+def split_char_folder(folder):
+    """A clothing folder → (category, item, skin, item folder), or None.
+
+    Most items live in 'Characters/<cat>/Assets/<item>/Skins/<skin>', but many don't (attachments,
+    hairs, pets, watches, body cosmetics: 'Characters/BodyCosmetics/BodyPaint/ElfPrincessDark_01',
+    'Characters/Hairs/Buzzcut/Skins/Coily/Headwear/Skins/Black'). Rule: the item is everything after
+    the category up to the first 'Skins' folder (a leading 'Assets/' isn't part of its name), the skin
+    is the rest ('Coily/Headwear/Black'). The item folder keeps the prefix before 'Characters/'."""
+    f = folder.replace("\\", "/").strip("/")
+    if "Characters/" not in f and not f.startswith("Characters"):
+        return None
+    head, rel = f.split("Characters", 1)
+    cat, _, rest = rel.strip("/").partition("/")
+    r = "/" + rest
+    i = (r + "/").find("/Skins/")
+    item_rel, skin = (r[1:i], r[i + 7:].replace("/Skins/", "/")) if i >= 0 else (rest, "")
+    item = item_rel[len("Assets/"):] if item_rel.startswith("Assets/") else item_rel
+    if not cat or not item or item == "Assets":
+        return None
+    return cat, item, skin, f"{head}Characters/{cat}/{item_rel}"
+
+
 def item_root(folder):
     """The folder FModel should export for a listed folder: the item / weapon / face it belongs to
     (FModel exports a folder with its subfolders). 'Characters/Mexico/Assets/AncientRings/Skins/Metal'
@@ -91,7 +116,10 @@ def item_root(folder):
             return "/".join(parts[:4])
         if len(parts) > 2 and parts[1] == "Heads":
             return "/".join(parts[:3])
-        return "/".join(parts[:2])
+        # other layouts ('Characters/BodyCosmetics/BodyPaint/X', 'Characters/Hairs/Buzzcut/Skins/…'):
+        # the item = up to its first Skins / Textures / … folder
+        cut = next((i for i, p in enumerate(parts) if i >= 2 and p in ITEM_SUBFOLDERS), len(parts))
+        return "/".join(parts[:max(cut, 2)])
     if parts[0] == "Items" and len(parts) > 2:
         n = 4 if parts[1] == "Firearms" and parts[2] != "Shared" else 3
         return "/".join(parts[:n])

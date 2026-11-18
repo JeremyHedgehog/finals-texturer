@@ -32,6 +32,7 @@ def build_layered(ctx, old_gen=False):
     arr_p = p.t("TextureArray_Patterns")
     tiling = p.s("Tiling", 1.0) or 1.0
 
+    ctx.section("Textures & masks")
     # Occlusion / Curvature / Material ID (+ opacity in alpha)
     ocm = ctx.tex(p.t("OcclusionCurvatureMaterialID"), data=True, packed=True, label="OCM (AO / Curvature / ID / Opacity)")
     if ocm is not None:
@@ -52,6 +53,10 @@ def build_layered(ctx, old_gen=False):
     cmask = ctx.tex(p.t("ColorMask"), data=True, label="Color Mask")
     cmask_out = _out(cmask, fallback=(1, 0, 0, 1))
     scheme_tex = ctx.tex(p.t("BaseColor"), data=True, label="Color Scheme Mask (BaseColor R)")
+    if cmask is not None:
+        # glow areas = where ColorA / B / C paint (a later channel wins, like groups.color_mask)
+        r, g, b = nb.separate(cmask_out, label="Paint areas (ColorA / B / C)")
+        ctx.areas = {3: b, 2: nb.mul(g, nb.sub(1.0, b)), 1: nb.mul(r, nb.mul(nb.sub(1.0, g), nb.sub(1.0, b)))}
 
     n_layers = 1
     for k in range(2, 9):
@@ -62,9 +67,11 @@ def build_layered(ctx, old_gen=False):
 
     outs = []
     for k in range(1, n_layers + 1):
+        ctx.section(f"Layer {k}")
         outs.append(_build_layer(ctx, k, curv, cmask_out, scheme_tex, old_gen,
                                  arr_c, arr_m, arr_n, arr_p, tiling))
 
+    ctx.section("Layer mix")
     ctx.layer_masks = _layer_masks(ctx, mat_id, n_layers)
     if n_layers == 1:
         lay = outs[0]
@@ -77,6 +84,7 @@ def build_layered(ctx, old_gen=False):
     cloth = lay["Shade As Cloth"]
 
     # Decals
+    ctx.section("Decals")
     if old_gen:
         # Decal slots are independent of layers: an item with 3 layers can use
         # decal slots 1-8.
@@ -94,6 +102,7 @@ def build_layered(ctx, old_gen=False):
             metal = nb.lerp(metal, dg, cov)
             cloth = nb.lerp(cloth, db, cov)
 
+    ctx.section("Normals & shading")
     desat = p.s("CharacterDesaturation", 0.0)
     if desat:
         lum = nb.vmath("DOT_PRODUCT", color, (0.3, 0.59, 0.11))
@@ -185,7 +194,7 @@ def _build_layer(ctx, k, curv, cmask_out, scheme_tex, old_gen, arr_c, arr_m, arr
     nb.feed(cm.inputs["Color Mask"], mask)
     nb.feed(cm.inputs["Strength"], strength)
     for name in ("ColorA", "ColorB", "ColorC", "ColorA2", "ColorB2", "ColorC2"):
-        nb.feed(cm.inputs[name], _col(p.v(name)))
+        nb.feed(cm.inputs[name], ctx.param_color(name, p.v(name)))
     nb.feed(cm.inputs["Scheme Mask"], scheme_in)
 
     g = nb.group(groups.surface_layer(), label=f"Layer {k}")
@@ -290,7 +299,7 @@ def _old_gen_pattern(ctx, k, gi, cmask_out, arr_p, tiling):
     nb.feed(gi["Pattern Mask Alpha"], pm[3])
     for x in "ABC":
         c = p.v(f"{k}_PatternColor{x}", (1, 1, 1, 0))
-        nb.feed(gi[f"Pattern Color {x}"], _col(c))
+        nb.feed(gi[f"Pattern Color {x}"], ctx.param_color(f"{k}_PatternColor{x}", c))
         nb.feed(gi[f"Pattern Color {x} Alpha"], c[3])
     r, g, b = nb.separate(cmask_out)
     w = nb.lerp(nb.lerp(nb.mul(r, pm[0]), pm[1], g), pm[2], b)
@@ -354,7 +363,7 @@ def _decal_vector(ctx, cx, cy, sx, sy, rotation, scale_first=False):
 
 
 def _apply_decal(ctx, color, tex_path, vec, color_a, color_b, recolor=1.0, label="Decal",
-                 number=None, coverage=1.0):
+                 number=None, coverage=1.0, names=None):
     """Composite a decal over colour.
 
     Recoloured decals map texture brightness to the two decal colours: white
@@ -366,6 +375,7 @@ def _apply_decal(ctx, color, tex_path, vec, color_a, color_b, recolor=1.0, label
     from the texture's own colours (0) to the recoloured result (1).
     number: show one number from a 0-9 digit atlas (UseNumber).
     coverage: extra 0..1 mask (e.g. the layers a decal is limited to).
+    names: parameter names of the two colours (shown as RGB nodes in the Parameters frame).
     """
     nb = ctx.nb
     name = asset_name(tex_path).lower()
@@ -376,11 +386,13 @@ def _apply_decal(ctx, color, tex_path, vec, color_a, color_b, recolor=1.0, label
     if t is None:
         return color
     raw = t.outputs["Color"]
-    a = tuple(_col(color_a)[:3])
-    b = tuple(_col(color_b)[:3])
+    if names and recolor > 0.0:
+        color_a, color_b = ctx.param_color(names[0], color_a), ctx.param_color(names[1], color_b)
+    else:
+        color_a, color_b = _col(color_a), _col(color_b)
     if is_mask:
         r, _g, _b = nb.separate(raw)
-        tinted = nb.mix(_col(color_b), _col(color_a), r, label=f"{label} colours")
+        tinted = nb.mix(color_b, color_a, r, label=f"{label} colours")
         own = nb.combine(r, r, r)
     else:
         # Recolour by brightness: coloured artwork still maps white → ColorA,
@@ -388,13 +400,14 @@ def _apply_decal(ctx, color, tex_path, vec, color_a, color_b, recolor=1.0, label
         # A light grey, B black → grey badge like the store image).
         lum = nb.node("ShaderNodeRGBToBW", f"{label} brightness")
         nb.feed(lum.inputs[0], raw)
-        tinted = nb.mix(_col(color_b), _col(color_a), lum.outputs[0], label=f"{label} colours")
+        tinted = nb.mix(color_b, color_a, lum.outputs[0], label=f"{label} colours")
         own = raw
     recolor = max(0.0, min(1.0, recolor))
     dcol = tinted if recolor >= 1.0 else nb.mix(own, tinted, recolor, label=f"{label} recolour")
     alpha = t.outputs["Alpha"]
     if coverage != 1.0:
         alpha = nb.mul(alpha, coverage, clamp=True)
+    ctx.add_decal_mask(alpha)
     return nb.mix(color, dcol, alpha, label=label)
 
 
@@ -464,7 +477,7 @@ def _global_decal(ctx, color):
     number = p.s("DecalNumber", 32.0) if p.s("UseDecalNumber") else None
     ctx.log.info(f"  Decal {asset_name(path)}")
     out = _apply_decal(ctx, color, path, vec, p.v("DecalColorA"), p.v("DecalColorB", (0, 0, 0, 1)),
-                       recolor=p.s("DecalTint", 1.0), number=number)
+                       recolor=p.s("DecalTint", 1.0), number=number, names=("DecalColorA", "DecalColorB"))
     masks = None
     mpath = p.t("DecalMasks")
     surf = p.s("DecalSurfaceBlend", 0.0)
@@ -511,7 +524,7 @@ def _old_gen_decal(ctx, k, color):
     ctx.log.info(f"  Decal slot {k}: {asset_name(path)}")
     return _apply_decal(ctx, color, path, vec, p.v(f"{k}_ColorA", (1, 1, 1, 1)),
                         p.v(f"{k}_ColorB", (0, 0, 0, 1)), recolor=p.s(f"{k}_ColorOverride", 0.0),
-                        label=f"Decal {k}", number=number, coverage=coverage)
+                        label=f"Decal {k}", number=number, coverage=coverage, names=(f"{k}_ColorA", f"{k}_ColorB"))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
