@@ -37,6 +37,8 @@ format, so the add-on reads everything the same way whichever tool exported it.
 | `weapons.py` | Weapons tab: weapon list, skins, assembly of parts on sockets |
 | `objects_tab.py`, `blueprints.py` | Objects tab: catalogued objects assembled from Blueprints |
 | `posing.py`, `poses_tab.py` | Posing tab: `.psa` reader, pose maths, Auto-Rig Pro controls, weapon in hand |
+| `first_person.py` | Posing tab, First Person mode: the weapon's first-person animation on a pose rig built from the `.psa`'s master skeleton (helper bones carry it onto the character's bones whatever their orientation), weapon on `weapon_root`, `FP_Camera` on the camera bone, arms-only mask, Bake / Reset |
+| `twist.py` | Forearm twist bones (`FT_twist_*`, driven by the hand's roll) and the forearm weight split, added when posing; Simplify merges them back |
 | `rigging.py` | Rigging tab: simplify the game rig, attach pieces, Auto-Rig Pro Quick Rig |
 | `shapekeys.py` | Body-type and item shape keys |
 | `sockets.py` | Socket table (`data/sockets.json`) and static-mesh placement |

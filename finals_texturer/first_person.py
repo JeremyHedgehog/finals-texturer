@@ -43,14 +43,16 @@ _items_cache = {}
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _psk_psa():
+    """The installed PSK/PSA importer's psk.importer module, wherever it's installed (an extension from any
+    repository: bl_ext.blender_org.…, bl_ext.user_default.…, or the legacy add-on). Doesn't enable anything:
+    turning add-ons on is the user's choice (and enabling a guessed name changes their preferences)."""
     import addon_utils
-    for mod in ("bl_ext.user_default.io_scene_psk_psa", "io_scene_psk_psa"):
-        try:
-            addon_utils.enable(mod, default_set=True)
-        except Exception:
+    for mod in addon_utils.modules(refresh=False):
+        name = mod.__name__
+        if name.split(".")[-1] != "io_scene_psk_psa" or not addon_utils.check(name)[1]:
             continue
         try:
-            return __import__(mod + ".psk.importer", fromlist=["import_psk", "PskImportOptions"])
+            return __import__(name + ".psk.importer", fromlist=["import_psk", "PskImportOptions"])
         except ImportError:
             continue
     raise RuntimeError("The PSK/PSA importer (io_scene_psk_psa) isn't installed or enabled.")
