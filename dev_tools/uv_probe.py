@@ -1,8 +1,9 @@
-import bpy, sys, importlib, mathutils, math
-sys.path.insert(0, r"C:/Users/bisch/Desktop/New folder")
+import bpy, sys, importlib, mathutils, math, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 importlib.import_module("add-on-io-scene-psk-psa-v9_1_2").register()
 for o in list(bpy.data.objects): bpy.data.objects.remove(o)
-bpy.ops.psk.import_file(filepath=r"D:/BlenderStuff/Fmodel/Output/Exports/Discovery/Content/Discovery/Characters/Racing/Assets/BikerLoosePants/SK_Racing_BikerLoosePants_M.psk")
+# mesh: FT_PROBE_MESH (a .psk), default the regression set's biker pants under FT_EXPORTS
+bpy.ops.psk.import_file(filepath=os.environ.get("FT_PROBE_MESH") or os.path.join(os.environ.get("FT_EXPORTS", ""), "Discovery/Content/Discovery/Characters/Racing/Assets/BikerLoosePants/SK_Racing_BikerLoosePants_M.psk"))
 me = [o for o in bpy.data.objects if o.type == 'MESH'][0]; mw = me.matrix_world; uvl = me.data.uv_layers[0].data
 faces = []
 for p in me.data.polygons:

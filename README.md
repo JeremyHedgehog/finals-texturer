@@ -74,7 +74,7 @@ It also covers:
 ## Installation
 
 1. Download the latest `finals_texturer-<version>.zip` from the
-   [Releases page](https://github.com/Sodutrii/finals-texturer/releases). Don't unzip it.
+   [Releases page](https://github.com/JeremyHedgehog/finals-texturer/releases). Don't unzip it.
 2. In Blender: **Edit → Preferences → Get Extensions**, open the drop-down menu (top right) and choose
    **Install from Disk…**, then pick the zip.
 3. Make sure the PSK importer add-on is installed and enabled too.
@@ -158,6 +158,10 @@ names) into your FModel Export Folder. FModel doesn't have to be open.
   clothing or its rig) and **Import** puts the item straight on it, in that character's class and gender,
   bound like Rigging's Attach. It follows the character wherever it stands, its pose and its Auto-Rig Pro
   rig. Works before and after Simplify.
+- **Body paint, tattoos, makeup and eye colours** have no model of their own: select a character (imported in
+  the Character tab) and click **Apply to Character**. It wears one item per body slot like in game (body paint,
+  face paint, tattoos, eyes), so a new makeup replaces a full body paint. The **wears** box lists what's on with
+  a button to take each off. Outfits put their body paint / makeup on the selected character too.
 - **Apply to Selected** puts the chosen skin's materials on items you already imported.
 - **Number decals** (jerseys etc.): the game sets the number per player, so you choose it in the panel.
 
@@ -280,15 +284,25 @@ Import Size is also in each tab's Options fold-out.
 
 ## For developers
 
+Want to help? Start with [CONTRIBUTING.md](CONTRIBUTING.md) (setup, house rules, pull requests). The developer
+docs:
+
+| Doc | What's in it |
+|---|---|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Code map, how an import flows, conventions (units, UV quirks, material building, characters) |
+| [docs/MATERIAL_RULES.md](docs/MATERIAL_RULES.md) | What each game shader does, as rebuilt and verified |
+| [docs/SHADER_PIPELINE.md](docs/SHADER_PIPELINE.md) | Reading the game's compiled shaders and checking a builder against them |
+| [docs/TESTING.md](docs/TESTING.md) | Comparison renders, the regression set, test exports, Blender pitfalls |
+
 ### Repository layout
 
 | Path | Contents |
 |---|---|
 | `finals_texturer/` | The add-on (Blender extension). `builders/` holds the material builders (one per game shader family) |
 | `exporter/` | The Export Now helper (`ft_exporter`, C#/.NET 10, built on CUE4Parse) |
-| `dev_tools/` | Development scripts: comparison renders against store images, regression lists, and `shader_extract/`, the compiled-shader extraction and simulation pipeline used to verify materials |
-| `add-on-io-scene-psk-psa-v9_1_2/` | Copy of the PSK importer used by the test scripts |
-| `CLAUDE.md` | Detailed project notes: verified shader rules, code map, workflows |
+| `dev_tools/` | Development scripts: comparison renders against store images, regression lists, and `shader_extract/`, the compiled-shader extraction and simulation pipeline used to verify materials. Paths come from environment variables (`FT_EXPORTS`, `FT_BLENDER`, `SP`), see [docs/TESTING.md](docs/TESTING.md) |
+| `docs/` | Developer documentation |
+| `add-on-io-scene-psk-psa-v9_1_2/` | Your local copy of the PSK importer for the test scripts (not tracked) |
 
 ### Building
 
@@ -322,14 +336,15 @@ formula comes from the game's compiled shader:
 2. It annotates the shader with parameter names and simulates it on the item's textures.
 3. `compare_game.py` checks the result texel by texel against the add-on's baked material.
 
-The verified rules for each shader are listed in `CLAUDE.md`. Fixes are kept as general rules that hold for
-every skin, not per-item tweaks.
+The verified rules for each shader are listed in [docs/MATERIAL_RULES.md](docs/MATERIAL_RULES.md), the method in
+[docs/SHADER_PIPELINE.md](docs/SHADER_PIPELINE.md). Fixes are kept as general rules that hold for every skin, not
+per-item tweaks.
 
 ---
 
 ## Credits and licences
 
-- **Finals Texturer** is licensed under the GPL-3.0-or-later.
+- **Finals Texturer** is licensed under the GPL-3.0-or-later ([LICENSE](LICENSE)).
 - Game assets © Embark Studios. This project doesn't include or redistribute any game files.
 - [FModel](https://fmodel.app/) and [CUE4Parse](https://github.com/FabianFG/CUE4Parse) (Apache 2.0) make
   reading the game files possible; the Export Now helper is built on CUE4Parse. The helper's third-party

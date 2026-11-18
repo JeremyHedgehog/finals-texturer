@@ -25,7 +25,7 @@ ADJUST_NODE = "FT Adjust"
 class Ctx:
     """Everything one material build needs."""
 
-    def __init__(self, mat, params, finder, log, detail_uv=None, cm_per_unit=1.0):
+    def __init__(self, mat, params, finder, log, detail_uv=None, cm_per_unit=1.0, uv_maps=()):
         self.mat = mat
         # Game centimetres per Blender unit of the mesh (100 at real size):
         # for material parameters given in game units (e.g. heights).
@@ -36,6 +36,7 @@ class Ctx:
         # textures, patterns, hue noise) tile on it. Colour masks, mesh
         # normals, OCM and decals stay on the first channel.
         self.detail_uv = detail_uv
+        self.uv_maps = list(uv_maps)      # the mesh's UV map names in order (UE UV channels 0, 1, 2…)
         self._duv = None
         self.p = params
         self.finder = finder
@@ -82,6 +83,19 @@ class Ctx:
             self.decal_masks.append(alpha)
 
     # ── UVs ──────────────────────────────────────────────────────────────────
+    def uv_channel(self, index):
+        """UV of UE channel `index` as stored on the mesh (channel 0 = the default UV); None if missing."""
+        if index <= 0 or index >= len(self.uv_maps):
+            return self.uv() if index <= 0 else None
+        key = ("uvchan", index)
+        if key not in self._scaled:
+            prev = self.nb.section("UV maps")
+            n = self.nb.node("ShaderNodeUVMap", f"UV channel {index}")
+            self.nb.section(prev)
+            n.uv_map = self.uv_maps[index]
+            self._scaled[key] = n.outputs["UV"]
+        return self._scaled[key]
+
     def uv(self, scale=1.0, detail=False):
         if detail and self.detail_uv:
             if self._duv is None:
@@ -118,17 +132,21 @@ class Ctx:
         return img
 
     def tex(self, object_path, data=True, packed=False, scale=1.0, label=None,
-            vector=None, extension="REPEAT", detail=False):
-        """Image node for a texture object path, or None if it can't be found."""
+            vector=None, extension="REPEAT", detail=False, follow_srgb=False):
+        """Image node for a texture object path, or None if it can't be found.
+        follow_srgb: read a mask as the game does: sRGB-decoded unless its SRGB flag is false (UE default
+        true; nail patterns like T_Camo_03_X_Character_Inverted are). Not yet the rule for every builder."""
         if not object_path:
             return None
         if asset_name(object_path).lower() in defaults.NULL_TEXTURES:
             return None
-        key = (object_path, round(scale, 5), id(vector), extension, detail)
+        key = (object_path, round(scale, 5), id(vector), extension, detail, follow_srgb)
         if key in self._tex:
             return self._tex[key]
         path = self.finder.find_texture(object_path)
-        if path and not data and not self._is_srgb(object_path):
+        if path and data and follow_srgb and self._is_srgb(object_path):
+            data = False
+        elif path and not data and not self._is_srgb(object_path):
             # stored linear (SRGB false, e.g. the Cashout vault's colour texture): the game reads it raw
             data = True
         baked = None if path else self.atlas_image(object_path)

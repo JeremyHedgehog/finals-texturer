@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: How the add-on is built (for contributors)
+    url: https://github.com/JeremyHedgehog/finals-texturer/blob/main/CONTRIBUTING.md
+    about: Development setup, house rules and docs

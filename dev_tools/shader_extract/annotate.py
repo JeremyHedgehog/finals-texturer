@@ -103,7 +103,7 @@ def texture_names(layout, master_json, skip):
             name = (t.get("ParameterInfo") or {}).get("Name") or t.get("ParameterName")
             ref = refs[t["TextureIndex"]] if 0 <= t["TextureIndex"] < len(refs) else "?"
             out.append(f"{name} ({ref})" if name else f"[{ref}]")
-    return [n for i, n in enumerate(out) if i not in skip]
+    return [n for i, n in enumerate(out) if i not in skip and n not in ("Pos Tex", "Rot Tex")]   # VS-only (VAT)
 
 
 def main():

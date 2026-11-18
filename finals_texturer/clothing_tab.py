@@ -9,7 +9,7 @@ import zlib
 import bpy
 from bpy.props import BoolProperty, EnumProperty, StringProperty
 
-from . import defaults, importer, library, library_ui, search, ui
+from . import cosmetics, defaults, importer, library, library_ui, search, ui
 from .ue_assets import AssetFinder, Log, asset_name, find_skins, read_skin, resolve_material
 
 CHARS_REL = os.path.join("Discovery", "Content", "Discovery", "Characters")
@@ -292,7 +292,14 @@ def status(root, skin_path, cls="M"):
                 textures.append(_folder(t))
     groups = ui.split_folders(meshes, textures, flat)
     if not parts and os.path.basename(skin_path).startswith("DA_"):
-        res = (2, "No mesh (changes the body or another item)", groups)
+        missing = cosmetics.textures_missing(root, os.path.relpath(skin_path, root), finder) \
+            if cosmetics.is_cosmetic(root, skin_path) else None
+        if missing:
+            res = (1, f"{len(set(missing))} texture folder(s) not exported", ui.split_folders(textures=missing))
+        elif missing is not None:
+            res = (2, "Body cosmetic: select a character and click Apply to Character", groups)
+        else:
+            res = (2, "No mesh (changes the body or another item)", groups)
     elif meshes:
         res = (0, f"{len(meshes)} mesh(es) not exported", groups)
     elif textures:
@@ -446,6 +453,68 @@ class _Gender:
 
 # ── operators ────────────────────────────────────────────────────────────────
 
+def _wear(op, context, root, paths):
+    """Put material-only body cosmetics (body paint, tattoos, makeup, eye colours) on the selected character."""
+    from . import posing
+    body = posing.find_target(context)[0]
+    if body is None:
+        op.report({"ERROR"}, "Select the character (its body, head, clothing or rig) to put this on")
+        return {"CANCELLED"}
+    log = Log()
+    try:
+        for p in paths:
+            slots = cosmetics.equip(body, root, os.path.relpath(p, root))
+            log.info(f"{os.path.basename(p)} → {', '.join(slots)}")
+        done = cosmetics.apply(body, root, log)
+    except RuntimeError as e:
+        op.report({"ERROR"}, str(e))
+        return {"CANCELLED"}
+    _ctx["report"](op, log, done)
+    return {"FINISHED"}
+
+
+class FT_OT_cosmetic_off(bpy.types.Operator):
+    """Take this body cosmetic off the selected character"""
+    bl_idname = "finals_texturer.cosmetic_off"
+    bl_label = "Take Off"
+    bl_options = {"REGISTER", "UNDO"}
+    path: StringProperty(options={"HIDDEN", "SKIP_SAVE"})
+
+    def execute(self, context):
+        from . import posing
+        body = posing.find_target(context)[0]
+        if body is None:
+            return {"CANCELLED"}
+        cosmetics.take_off(body, self.path or None)
+        log = Log()
+        try:
+            done = cosmetics.apply(body, _root(context), log)
+        except RuntimeError as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+        _ctx["report"](self, log, done)
+        return {"FINISHED"}
+
+
+def _draw_worn(layout, context):
+    """What the selected character wears (body paint, tattoos, makeup, eyes), with take-off buttons."""
+    from . import posing
+    body = posing.find_target(context)[0]
+    state = cosmetics.worn(body) if body is not None else {}
+    if not state:
+        return
+    lib = library_ui._get_lib(context)
+    by_da = {(e.get("da") or "").replace("\\", "/").lower(): e for e in (lib["entries"] if lib else [])}
+    box = layout.box()
+    box.label(text=f"{body.name} wears:", icon="BRUSH_DATA")
+    for rel, slots in state.items():
+        e = by_da.get(rel.lower())
+        name = library.display_name(e) if e else os.path.basename(rel)[:-5]
+        row = box.row(align=True)
+        row.label(text=f"{', '.join(slots)}: {name}")
+        row.operator(FT_OT_cosmetic_off.bl_idname, text="", icon="X").path = rel
+
+
 class FT_OT_cloth_import(bpy.types.Operator):
     """Import the chosen item with the chosen skin (and, if set in Options, the other meshes the skin uses)"""
     bl_idname = "finals_texturer.cloth_import"
@@ -462,6 +531,8 @@ class FT_OT_cloth_import(bpy.types.Operator):
             folder = status(root, s["path"])[2].get("Item", [""])[0]
             self.report({"ERROR"}, f"Not exported yet: export {folder} in FModel (Copy Path), then Rescan")
             return {"CANCELLED"}
+        if cosmetics.is_cosmetic(root, s["path"]):
+            return _wear(self, context, root, [s["path"]])
         log = Log()
         sc = context.scene
         body = attach_target(context)
@@ -551,6 +622,15 @@ class FT_OT_cloth_outfit(bpy.types.Operator):
                                                  whole_skin=sc.ft_cloth_whole, lod_hint=cls)
             _attach(context, body, objs, log)
             objs = _alive(objs)
+            looks = [os.path.join(root, p["da"]) for p in library.outfit_items(lib, e)
+                     if p and p.get("da") and not p.get("meshes")]
+            looks = [p for p in looks if os.path.isfile(p) and cosmetics.is_cosmetic(root, p)]
+            if looks and body is not None:
+                for p in looks:
+                    cosmetics.equip(body, root, os.path.relpath(p, root))
+                cosmetics.apply(body, root, log)
+            elif looks:
+                log.info(f"{len(looks)} body paint / makeup piece(s): select a character to put them on")
         except RuntimeError as err:
             self.report({"ERROR"}, str(err))
             return {"CANCELLED"}
@@ -617,18 +697,23 @@ def draw(layout, context):
         ui.draw_status(layout, level, text, groups, export=export_paths(root, s["path"]),
                        what=os.path.basename(s["path"]))
     body = attach_target(context)
-    if body is not None:
+    cosmetic = s is not None and os.path.isfile(s["path"]) and cosmetics.is_cosmetic(root, s["path"])
+    if body is not None and not cosmetic:
         layout.label(text=f"Import attaches to {body.name}", icon="LINKED")
     row = layout.row(align=True)
-    row.operator(FT_OT_cloth_import.bl_idname, icon="IMPORT")
+    if cosmetic:
+        row.operator(FT_OT_cloth_import.bl_idname, text="Apply to Character", icon="BRUSH_DATA")
+    else:
+        row.operator(FT_OT_cloth_import.bl_idname, icon="IMPORT")
     row.operator(FT_OT_cloth_apply.bl_idname, icon="MATERIAL")
     img = store_image(root, s)
     op = row.operator(ui.FT_OT_show_image.bl_idname, text="", icon="IMAGE_DATA")
     op.path = img
+    _draw_worn(layout, context)
     ui.draw_options(layout, context, "CLOTHING", lambda c: _draw_options(c, context))
 
 
-CLASSES = (FT_OT_cloth_import, FT_OT_cloth_apply, FT_OT_cloth_outfit)
+CLASSES = (FT_OT_cloth_import, FT_OT_cloth_apply, FT_OT_cloth_outfit, FT_OT_cosmetic_off)
 
 
 def register(root_getter, report):

@@ -8,7 +8,7 @@ import bpy
 from . import builders, defaults
 from .ue_assets import (AssetFinder, Log, asset_name, export_of_type, mesh_base_name, ref_path,
                         find_skins, read_skin, tag_overrides,
-                        resolve_material, skeletal_slots)
+                        overlay_instance, resolve_material, skeletal_slots)
 
 DUP_SUFFIX = re.compile(r"\.\d{3}$")
 
@@ -337,6 +337,8 @@ def apply_to_object(obj, root, skin_choice, log, tags=None, slot_overrides=None)
         return 0
     if tags is None:
         tags = tuple(obj.get("ft_skin_tags", ()))
+    # body cosmetics laid over named game slots (cosmetics.py): {slot name lower: [MI paths]}
+    overlays = {k: list(v) for k, v in (obj.get("ft_param_overlays") or {}).items()}
     if slot_overrides is None:
         slot_overrides = {int(k): v for k, v in (obj.get("ft_slot_overrides") or {}).items()}
     else:
@@ -397,6 +399,17 @@ def apply_to_object(obj, root, skin_choice, log, tags=None, slot_overrides=None)
 
         log.info(f"  Slot {i} '{slot_name or psk_name}':")
         params = resolve_material(finder, object_path=target_path, json_path=target_json, log=log)
+        extra = overlays.get((slot_name or psk_name or "").lower()) if overlays else None
+        if extra and params.chain:
+            # body cosmetics: their own values over this slot's material, kept as a separate Blender
+            # material ("<name> + <cosmetic>") so other characters sharing the base material stay bare
+            used = [mi for mi in extra if overlay_instance(finder, params, mi, log)]
+            if used:
+                tag = " + ".join(asset_name(mi).replace("MI_BodyCosmetics_", "") for mi in used)
+                params.name = f"{params.name} + {tag}"
+                if params.source_files and params.source_files[0]:
+                    params.source_files[0] = params.source_files[0] + "|" + "|".join(used)
+                log.info(f"    + {tag}")
         if not params.chain:
             continue
         log.info(f"    {' > '.join(params.chain)}")
@@ -404,7 +417,7 @@ def apply_to_object(obj, root, skin_choice, log, tags=None, slot_overrides=None)
         uvs = obj.data.uv_layers
         detail_uv = uvs[1].name if len(uvs) > 1 else None
         kind = builders.build_material(mat, params, finder, log, detail_uv=detail_uv,
-                                       cm_per_unit=cm_per_unit(obj))
+                                       cm_per_unit=cm_per_unit(obj), uv_maps=[l.name for l in uvs])
         log.info(f"    built as {kind}")
         mslot.material = mat
         done += 1
