@@ -1,0 +1,50 @@
+name: Item looks wrong
+description: An imported item, weapon or object doesn't look like in the game / store
+labels: ["looks wrong"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks! A screenshot next to the store image is the most useful thing you can add.
+        The store image is the picture next to the item in the panel (the image button opens it).
+  - type: input
+    id: version
+    attributes:
+      label: Add-on version
+      description: Edit → Preferences → Add-ons → Finals Texturer
+      placeholder: "0.24.0"
+    validations:
+      required: true
+  - type: input
+    id: item
+    attributes:
+      label: Item and skin
+      description: In-game name if you know it, otherwise the names shown in the Category / Item / Skin pickers
+      placeholder: "Trentila racing tee (Casual / Basic Tshirt / Cotton_TrentilaRacing)"
+    validations:
+      required: true
+  - type: dropdown
+    id: tab
+    attributes:
+      label: Tab
+      options: [Clothing, Character, Weapons, Objects, Posing, Rigging]
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What looks wrong?
+      description: Which part, and how it should look. Drag screenshots in here (ours and the store image).
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: Finals panel → Show Log, copy the text in here
+      render: text
+  - type: input
+    id: blender
+    attributes:
+      label: Blender version and render engine
+      placeholder: "5.1.2, Eevee"

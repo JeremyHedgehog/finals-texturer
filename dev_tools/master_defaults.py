@@ -1,7 +1,8 @@
 import json, sys, glob, os
 SKIP = ("VolumeSize","BodyDissolve","erode","Thermal","Stencil","Dissolve","StartPoint","EndPoint","SpawnEffect","CharacterDesaturation","HitLocation","LocationOffset","Squach","ZMask","Play Rate","Sample Rate","DebugCurrent","QuatOffset","PosOffset","IsBoneVAT","DEBUG","EnableSecondary","Pos Tex","Rot Tex","ImpactRender","Decal","_DetailNormalOverride","_BaseNormalOverride","_ColorOverride","_LayerMask","_SurfaceOverride","_WidthRatio")
+EXP = os.environ.get("FT_EXPORTS") or sys.exit("Set FT_EXPORTS to your FModel Output/Exports folder (see docs/TESTING.md)")
 for name in sys.argv[1:]:
-    f = glob.glob(rf"D:/BlenderStuff/Fmodel/Output/Exports/Discovery/Content/Discovery/MaterialLibrary/**/{name}.json", recursive=True)
+    f = glob.glob(os.path.join(EXP, "Discovery", "Content", "Discovery", "MaterialLibrary", "**", f"{name}.json"), recursive=True)
     if not f: print("==", name, "NOT FOUND"); continue
     d = json.load(open(f[0], encoding="utf-8-sig")); e = [x for x in d if x.get("Type") == "Material"][0]
     ced = e.get("CachedExpressionData") or e["Properties"].get("CachedExpressionData")

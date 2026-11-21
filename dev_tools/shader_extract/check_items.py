@@ -16,8 +16,8 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-EXPORTS = os.environ.get("FT_EXPORTS", r"D:\BlenderStuff\Fmodel\Output\Exports")
-BLENDER = os.environ.get("FT_BLENDER", r"C:\Program Files (x86)\Steam\steamapps\common\Blender\blender.exe")
+EXPORTS = os.environ.get("FT_EXPORTS", "")       # FModel Output/Exports folder (required)
+BLENDER = os.environ.get("FT_BLENDER", "blender")   # Blender executable (default: on PATH)
 CHARS = "Discovery/Content/Discovery/Characters"
 
 

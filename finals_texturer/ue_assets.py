@@ -451,6 +451,19 @@ def guess_master(finder, names):
     return best[1] if best else None
 
 
+def overlay_instance(finder, params, object_path, log=None):
+    """Lay one material instance's own values (not its parents') over resolved params, like the game's
+    ECustomizationMaterialBehavior::OverrideParameters (body paint, tattoos, makeup, eye colours on the
+    character's skin / head / eye materials). Returns True if the file was found."""
+    data = finder.load_asset_json(object_path)
+    exp = export_of_type(data, MATERIAL_TYPES) if data is not None else None
+    if exp is None or exp.get("Type") == "Material":
+        (log or finder.log).warn(f"Missing cosmetic material '{asset_name(object_path)}' (game path {object_path}).")
+        return False
+    _read_instance_overrides(exp.get("Properties") or {}, params)
+    return True
+
+
 def resolve_material(finder, object_path=None, json_path=None, log=None, max_depth=12):
     """Walk MI → parent → … → base Material and merge every level's values.
 

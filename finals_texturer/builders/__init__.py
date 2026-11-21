@@ -10,9 +10,10 @@ One builder per master shader type (see defaults.shader_type):
 from .. import defaults
 from .common import Ctx, build_generic
 from .clothing import (build_attachment, build_feather, build_glass, build_hologram, build_lace,
-                       build_lace_skirt, build_layered, build_plastic_sheet, build_preview, build_team_color)
+                       build_lace_skirt, build_layered, build_plastic_sheet, build_preview, build_team_color,
+                       build_watch)
 from .character import (build_eye, build_eyelash, build_face, build_glitter, build_hair_cards, build_hidden,
-                        build_skin, build_teeth)
+                        build_nails, build_skin, build_teeth)
 from .weapon import build_weapon, build_weapon_fx, build_weapon_preset, build_weapon_text
 from .weapon_rank import build_weapon_crystal, build_weapon_fresnel
 from .objects import (build_atk_4materials, build_atk_button, build_atk_canister, build_cashout_prop,
@@ -44,6 +45,8 @@ BUILDERS = {
     defaults.WEAPON_TEXT: build_weapon_text,
     defaults.WEAPON_FX: build_weapon_fx,
     defaults.HAIR: build_hair_cards,
+    defaults.NAILS: build_nails,
+    defaults.WATCH: build_watch,
     defaults.GLITTER: build_glitter,
     defaults.WEAPON_FRESNEL: build_weapon_fresnel,
     defaults.WEAPON_CRYSTAL: build_weapon_crystal,
@@ -69,11 +72,11 @@ BUILDERS = {
 }
 
 
-def build_material(mat, params, finder, log, detail_uv=None, cm_per_unit=1.0):
+def build_material(mat, params, finder, log, detail_uv=None, cm_per_unit=1.0, uv_maps=()):
     kind = defaults.shader_type(params)
     if mat.node_tree is None:
         mat.use_nodes = True
-    ctx = Ctx(mat, params, finder, log, detail_uv=detail_uv, cm_per_unit=cm_per_unit)
+    ctx = Ctx(mat, params, finder, log, detail_uv=detail_uv, cm_per_unit=cm_per_unit, uv_maps=uv_maps)
     BUILDERS[kind](ctx)
     mat["ft_material"] = params.name
     mat["ft_chain"] = " > ".join(params.chain)

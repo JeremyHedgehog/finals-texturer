@@ -1,0 +1,22 @@
+name: Feature request
+description: A new item type, shader, tab feature or workflow improvement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What would you like?
+      description: What you're trying to do in Blender and what would make it easier
+    validations:
+      required: true
+  - type: textarea
+    id: examples
+    attributes:
+      label: Example items
+      description: Items / skins this is about (in-game names), screenshots if useful
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contributing
+      options:
+        - label: I'd like to work on this myself

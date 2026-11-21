@@ -374,14 +374,15 @@ def _tidy_bones(eb):
 # ---------------------------------------------------------------------------
 
 def rest_mismatch(src_arm, master):
-    """Largest distance between same-named bone heads (world space)."""
+    """Largest distance between same-named bone heads, each in its armature's own space (a character
+    moved away from the origin isn't a misfit; object scales stay 1)."""
     worst, worst_name = 0.0, ""
     for b in src_arm.data.bones:
         mb = master.data.bones.get(b.name)
         if mb is None:
             continue
-        a = src_arm.matrix_world @ b.head_local
-        c = master.matrix_world @ mb.head_local
+        a = b.head_local
+        c = mb.head_local
         d = (a - c).length
         if d > worst:
             worst, worst_name = d, b.name
@@ -427,7 +428,11 @@ def attach_pieces(master, objects, delete_source_armatures=True, report=print):
     for me in meshes:
         socket = me.get("ft_socket", "")
         if socket and not me.vertex_groups:
-            # static mesh on a bone socket (hat, glasses…): follows that bone
+            # static mesh on a bone socket (hat, glasses…): follows that bone; a helper bone Simplify removed
+            # (watches: lowerarm_vpj_04_l) → the bone it was merged into
+            if socket not in master_names:
+                t = resolve_target(socket, None, master_names)
+                socket = (t[0][0] if isinstance(t, list) else t) or socket
             if socket not in master_names:
                 warnings.append(f"{me.name}: attaches to '{socket}' in game, which the body rig "
                                 "doesn't have; parent it by hand")

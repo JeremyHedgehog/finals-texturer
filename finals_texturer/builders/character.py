@@ -1,6 +1,7 @@
 """Character shaders (Character tab): body skin, face, eyes, eyelashes, teeth,
 hair cards (eyebrows / hair styles), glitter skin, hidden eye shells."""
 
+from ..ue_assets import asset_name
 from .common import _col, _packed_normal, _alpha_range, _hsv_norm
 
 def build_skin(ctx):
@@ -37,6 +38,11 @@ def build_skin(ctx):
         g = grey.outputs[0]
         color = nb.mix(color, nb.combine(g, g, g), desat, label=f"SkinDesaturation {desat:g}")
     col = nb.mix(color, tint, 1.0, "MULTIPLY", label="ColorMultiply") if color is not None else tint
+    col, paint_a, paint_data = _body_layers(
+        ctx, col, _uv_select(ctx, p.s("BodyPaintUV", 0.0)), _uv_select(ctx, p.s("TattooUV", 0.0)),
+        p.s("BodyPaintTiles", 1.0), p.s("TattooTiles", 1.0),
+        paint_swap=round(p.s("BodyPaintUV", 0.0)) >= 1, tattoo_swap=round(p.s("TattooUV", 0.0)) >= 1)
+    ctx.section("Material")
     nb.feed(bsdf.inputs["Base Color"], col)
     normal = pick("BodyNormalMap", "HandsNormalMap", True, "Body / hands normals")
     if normal is not None:
@@ -54,9 +60,10 @@ def build_skin(ctx):
         lw = nb.node("ShaderNodeLayerWeight", "Facing (1 - N.V)")
         nb.feed(lw.inputs["Blend"], 0.5)
         fres = nb.math("MULTIPLY_ADD", nb.math("POWER", lw.outputs["Facing"], 5.0), 0.96, 0.04, label="Schlick fresnel")
-        nb.feed(bsdf.inputs["Roughness"], nb.mul(nb.lerp(na, 0.8, fres), rough, clamp=True))
+        r_out = nb.mul(nb.lerp(na, 0.8, fres), rough, clamp=True)
     else:
-        nb.feed(bsdf.inputs["Roughness"], min(1.0, rough * 0.8))
+        r_out = min(1.0, rough * 0.8)
+    nb.feed(bsdf.inputs["Roughness"], _paint_surface(ctx, bsdf, paint_a, paint_data, r_out))
     nb.feed(bsdf.inputs["Specular IOR Level"], max(0.0, min(1.0, p.s("Specular", 0.5))))
     ctx.finish(two_sided=bool(p.two_sided))
 
@@ -73,14 +80,18 @@ def build_face(ctx):
     p, nb = ctx.p, ctx.nb
     bsdf = ctx.bsdf()
     c = ctx.tex(p.t("BaseColor"), data=False, label="BaseColor")
-    nb.feed(bsdf.inputs["Base Color"], c.outputs["Color"] if c is not None else (0.6, 0.45, 0.4, 1.0))
+    color, paint_a, paint_data = _body_layers(ctx, c.outputs["Color"] if c is not None else (0.6, 0.45, 0.4, 1.0),
+                                              ctx.uv(), ctx.uv())
+    ctx.section("Material")
+    nb.feed(bsdf.inputs["Base Color"], color)
     # Face normal maps keep the normal in R/G only; B holds something else
     # (vector length ~0.2-0.4 if read as XYZ, which gave dark blotches).
     # Rebuilding Z from R/G is also right for ordinary normal maps.
     n = ctx.tex(p.t("Normal"), data=True, packed=True, label="Normal (R/G normal, B roughness)")
     if n is not None:
         nb.feed(bsdf.inputs["Normal"], _packed_normal(ctx, n)[0])
-    _face_surface(ctx, bsdf, n, c)
+    rough = _face_surface(ctx, bsdf, n, c)
+    nb.feed(bsdf.inputs["Roughness"], _paint_surface(ctx, bsdf, paint_a, paint_data, rough))
     # The head mesh reaches over the shoulders and fades out into the body:
     # M_Face's fixed T_Face_NeckFade (white = head, black at the UV's bottom
     # edge) x FadeAmount is the opacity (dithered in game, hashed here).
@@ -135,7 +146,7 @@ def _face_surface(ctx, bsdf, normal, color):
     rough = nb.math("MULTIPLY_ADD", nb.sub(1.0, micro), p.s("Micro Cavity Roughness", 0.0), rough)
     if hair != 0.0:
         rough = nb.lerp(rough, p.s("Hair Roughness", 0.5), hair)
-    nb.feed(bsdf.inputs["Roughness"], nb.clamp01(rough))
+    rough = nb.clamp01(rough)
 
     spec = nb.lerp(p.s("LipSpecular", 0.5), p.s("Specular", 0.5), mask_b)
     spec = nb.mul(spec, nb.math("MULTIPLY_ADD", nb.sub(cav, 1.0), p.s("Specular Cavity Amount", 0.0), 1.0))
@@ -143,6 +154,7 @@ def _face_surface(ctx, bsdf, normal, color):
     if hair != 0.0:
         spec = nb.lerp(spec, p.s("Hair Specular", 0.5), hair)
     nb.feed(bsdf.inputs["Specular IOR Level"], nb.clamp01(spec))
+    return rough
 
 
 GREY_IRIS = ("/Game/Discovery/Characters/Heads/Shared/Eyes/Textures/"
@@ -203,10 +215,27 @@ def build_eye(ctx):
         pupil_r = 0.42 * p.s("PupilScale", 0.7)
         pupil = nb.map_range(rel, pupil_r - 0.04, pupil_r + 0.04, 1.0, 0.0, mode="SMOOTHSTEP", label="Pupil")
         iris_c = nb.mix(iris_c, (0.005, 0.005, 0.005, 1.0), pupil, label="Pupil (PupilScale)")
-    iris_c = nb.mix(iris_c, _col(p.v("IrisHueTint", (1, 1, 1, 1))), 1.0, "MULTIPLY", label="IrisHueTint")
+    shift = p.s("IrisHueShift", 0.0)
+    if shift:
+        # compiled shader: rotation about the grey axis by IrisHueShift turns
+        hsv = nb.node("ShaderNodeHueSaturation", "IrisHueShift")
+        nb.feed(hsv.inputs["Hue"], (0.5 + shift) % 1.0)
+        nb.feed(hsv.inputs["Color"], iris_c)
+        iris_c = hsv.outputs["Color"]
+    iris_c = nb.mix(iris_c, ctx.param_color("IrisHueTint", _col(p.v("IrisHueTint", (1, 1, 1, 1)))), 1.0,
+                    "MULTIPLY", label="IrisHueTint")
     iris_c = nb.mix(iris_c, (p.s("IrisBrightness", 1.0),) * 3 + (1.0,), 1.0, "MULTIPLY",
                     label="IrisBrightness", clamp_result=True)
+    sat_ = p.s("IrisSaturation", 1.0)
+    if sat_ != 1.0:
+        grey = nb.vmath("DOT_PRODUCT", iris_c, (1 / 3, 1 / 3, 1 / 3), label="Iris grey")
+        iris_c = nb.mix(nb.combine(grey, grey, grey), iris_c, max(0.0, sat_), label="IrisSaturation")
     nb.feed(bsdf.inputs["Base Color"], nb.mix(sclera_c, iris_c, iris_mask, label="Sclera / iris"))
+    glow = p.s("IrisEmissiveIntensity", 0.0)
+    if glow:
+        # glowing lenses (eye cosmetics): iris colour × IrisEmissiveIntensity inside the iris
+        nb.feed(bsdf.inputs["Emission Color"], nb.mix((0, 0, 0, 1), iris_c, iris_mask, label="Iris glow"))
+        nb.feed(bsdf.inputs["Emission Strength"], ctx.param_value("IrisEmissiveIntensity", glow))
     nb.feed(bsdf.inputs["Roughness"], max(0.0, min(1.0, p.s("ScleraRoughness", 0.2))))
     nb.feed(bsdf.inputs["Coat Weight"], 1.0)
     nb.feed(bsdf.inputs["Coat Roughness"], 0.03)
@@ -356,3 +385,156 @@ def build_hidden(ctx):
     out = nb.node("ShaderNodeOutputMaterial")
     nb.feed(out.inputs["Surface"], t.outputs[0])
     ctx.finish(two_sided=True, blended=True)
+
+
+def build_nails(ctx):
+    """M_CharacterNails_Base (nail cosmetics on SK_Nails_*), from the compiled shader (2026-11-18).
+
+    UE UVs (v down): hand = round(sat(v)) (v ≥ 0.5 = right hand) picks Left/Right ColorA / ColorB.
+    Pattern / colour texture UV: ((uv − 0.5) × PatternTiling; x × (1 + MirrorLeftHand·(2·hand − 2)),
+    y × PatternTilingY) + PatternOffset + 0.5.
+    Plain: t = Pattern R → colour lerp(A, B, t), metallic lerp(MetallicA, MetallicB, t), roughness
+    lerp(RoughnessA, RoughnessB, t). UseColorTexture: colour = lerp(A, 2·tex.rgb·B, tex.a), metallic
+    MetallicA, roughness RoughnessA. No normal map. UseHolographic (rainbow fresnel) is left out.
+    """
+    p, nb = ctx.p, ctx.nb
+    bsdf = ctx.bsdf()
+    ctx.section("Nail UVs")
+    sep = nb.separate(ctx.uv(), label="UV")
+    u, v = sep[0], nb.math("SUBTRACT", 1.0, sep[1], label="UE v (down)")
+    hand = nb.math("ROUND", v, clamp=True, label="Hand (1 = right)")
+    tile = p.s("PatternTiling", 1.0)
+    gx = nb.math("MULTIPLY", nb.math("SUBTRACT", u, 0.5), tile)
+    gy = nb.math("MULTIPLY", nb.math("SUBTRACT", v, 0.5), tile)
+    mirror = p.s("MirrorLeftHand", 0.0)
+    if mirror:
+        fac = nb.math("MULTIPLY_ADD", nb.math("MULTIPLY_ADD", hand, 2.0, -2.0), mirror, 1.0,
+                      label="Mirror left hand")
+        gx = nb.math("MULTIPLY", gx, fac)
+    x = nb.math("ADD", gx, p.s("PatternOffsetX", 0.0) + 0.5)
+    y = nb.math("ADD", nb.math("MULTIPLY", gy, p.s("PatternTilingY", 1.0)), p.s("PatternOffsetY", 0.0) + 0.5)
+    vec = nb.combine(x, nb.math("SUBTRACT", 1.0, y), 0.0, label="Pattern UV (Blender)")
+
+    ctx.section("Material")
+    a = nb.mix(ctx.param_color("LeftColorA", _col(p.v("LeftColorA", (0.2, 0.013, 0.042, 1)))),
+               ctx.param_color("RightColorA", _col(p.v("RightColorA", (0.2, 0.013, 0.042, 1)))), hand,
+               label="ColorA (left / right)")
+    b = nb.mix(ctx.param_color("LeftColorB", _col(p.v("LeftColorB", (0.333, 0.021, 0.07, 1)))),
+               ctx.param_color("RightColorB", _col(p.v("RightColorB", (0.333, 0.021, 0.07, 1)))), hand,
+               label="ColorB (left / right)")
+    sat = lambda x_: max(0.0, min(1.0, x_))
+    tex = ctx.tex(p.t("ColorTexture"), data=False, vector=vec, label="ColorTexture") \
+        if p.sw("UseColorTexture") else None
+    if tex is not None:
+        tinted = nb.mix(tex.outputs["Color"], b, 1.0, "MULTIPLY", label="2 · tex · ColorB")
+        tinted = nb.mix(tinted, (2.0, 2.0, 2.0, 1.0), 1.0, "MULTIPLY")
+        color = nb.mix(a, tinted, tex.outputs["Alpha"], label="ColorTexture over ColorA (alpha)")
+        metal, rough = sat(p.s("MetallicA", 0.0)), sat(p.s("RoughnessA", 0.3))
+    else:
+        pat = ctx.tex(p.t("Pattern"), data=True, vector=vec, label="Pattern (R)", follow_srgb=True)
+        t = nb.separate(pat.outputs["Color"])[0] if pat is not None else 1.0
+        color = nb.mix(a, b, t, label="ColorA → ColorB by pattern")
+        metal = nb.math("MULTIPLY_ADD", t, p.s("MetallicB", 0.0) - p.s("MetallicA", 0.0), p.s("MetallicA", 0.0),
+                        clamp=True, label="Metallic A → B") if pat is not None else sat(p.s("MetallicB", 0.0))
+        rough = nb.math("MULTIPLY_ADD", t, p.s("RoughnessB", 0.3) - p.s("RoughnessA", 0.3),
+                        p.s("RoughnessA", 0.3), clamp=True, label="Roughness A → B") \
+            if pat is not None else sat(p.s("RoughnessB", 0.3))
+    desat = p.s("CharacterDesaturation", 0.0)
+    if desat:
+        grey = nb.vmath("DOT_PRODUCT", color, (0.3, 0.59, 0.11), label="Luminance")
+        color = nb.mix(color, nb.combine(grey, grey, grey), desat, label="CharacterDesaturation")
+    nb.feed(bsdf.inputs["Base Color"], color)
+    nb.feed(bsdf.inputs["Metallic"], metal)
+    nb.feed(bsdf.inputs["Roughness"], rough)
+    ctx.finish(two_sided=True)
+
+
+# ── body paint, tattoos, makeup (M_Skin and M_Face, compiled shaders 2026-11-18) ─────────────────
+
+def _is_default_paint(path):
+    return not path or asset_name(path).lower().startswith("t_tattoo_default")
+
+
+def _paint_tile(ctx, uv, tiles, place, label, swapped=False):
+    """UE tile placement of a paint / tattoo texture: x = u / tiles + placement, y = frac(UE v); the texture
+    shows only inside the tile (0 < x < 1). swapped: skinned meshes hand UV channels ≥ 1 to the pixel shader as
+    (v, u) (TexCoords[i/2].zw) and M_Skin reads them as they come, so x = UE v, y = u. Returns (Blender
+    texture vector, inside 0/1)."""
+    nb = ctx.nb
+    u, vb, _w = nb.separate(uv, label=f"{label} UV")
+    v = nb.math("SUBTRACT", 1.0, vb)
+    if swapped:
+        u, v = v, u
+    x = nb.math("MULTIPLY_ADD", u, 1.0 / tiles if tiles else 1.0, place, label=f"{label} x")
+    y = nb.math("FRACT", v)
+    inside = nb.math("GREATER_THAN", nb.mul(nb.mul(x, nb.sub(1.0, x)), nb.mul(y, nb.sub(1.0, y))), 0.0,
+                     label=f"{label} inside tile")
+    return nb.combine(x, nb.math("SUBTRACT", 1.0, y), 0.0, label=f"{label} texture UV"), inside
+
+
+def _body_layers(ctx, color, paint_uv, tattoo_uv, paint_tiles=1.0, tattoo_tiles=1.0, paint_swap=False,
+                 tattoo_swap=False):
+    """Tattoo + body paint / makeup over a skin colour (same maths in M_Skin and M_Face):
+      skin x lerp(1, tattoo, inside) x sat(paint + 1 - sat(a + inside * BodyColorMultiplyNonMasked))
+      -> lerp(..., tattoo, tattoo alpha * inside * TattooColorOverride)
+      -> lerp(..., paint, a * BodyColorOverride),   a = paint alpha * inside
+    Returns (colour, paint coverage a or None, paint data node or None)."""
+    p, nb = ctx.p, ctx.nb
+    have_paint = not _is_default_paint(p.t("BodyPaintColor"))
+    have_tattoo = not _is_default_paint(p.t("TattooColor"))
+    if not have_paint and not have_tattoo:
+        return color, None, None
+    ctx.section("Body paint / tattoo")
+    a = pc = pdata = inside_p = None
+    if have_paint:
+        vec, inside_p = _paint_tile(ctx, paint_uv, paint_tiles, p.v("BodyPaintPlacement", (0, 0, 1, 0))[0], "Paint",
+                                    paint_swap)
+        pc = ctx.tex(p.t("BodyPaintColor"), data=False, packed=True, vector=vec, label="BodyPaintColor")
+        if not _is_default_paint(p.t("BodyPaintData")):
+            pdata = ctx.tex(p.t("BodyPaintData"), data=True, packed=True, vector=vec, follow_srgb=True,
+                            label="BodyPaintData (normal RG, roughness B, metal A)")
+        if pc is not None:
+            a = nb.mul(pc.outputs["Alpha"], inside_p)
+    if have_tattoo:
+        vec_t, inside_t = _paint_tile(ctx, tattoo_uv, tattoo_tiles, p.v("TattooPlacement", (0, 0, 1, 0))[0],
+                                      "Tattoo", tattoo_swap)
+        tc = ctx.tex(p.t("TattooColor"), data=False, packed=True, vector=vec_t, label="TattooColor")
+        if tc is not None:
+            color = nb.mix(color, nb.mix((1, 1, 1, 1), tc.outputs["Color"], inside_t), 1.0, "MULTIPLY",
+                           label="x tattoo (inside its tile)")
+            over = max(0.0, min(1.0, p.s("TattooColorOverride", 0.0)))
+            if over:
+                color = nb.mix(color, tc.outputs["Color"], nb.mul(nb.mul(tc.outputs["Alpha"], inside_t), over),
+                               label="TattooColorOverride")
+    if a is not None:
+        nm = p.s("BodyColorMultiplyNonMasked", 0.0)
+        cover = nb.math("ADD", a, nb.mul(inside_p, nm) if nm else 0.0, clamp=True)
+        mult = nb.mix(pc.outputs["Color"], (1, 1, 1, 1), nb.sub(1.0, cover), "ADD", clamp_result=True,
+                      label="Paint multiply")
+        color = nb.mix(color, mult, 1.0, "MULTIPLY", label="x paint")
+        over = max(0.0, min(1.0, p.s("BodyColorOverride", 0.0)))
+        if over:
+            color = nb.mix(color, pc.outputs["Color"], nb.mul(a, over), label="BodyColorOverride")
+        ctx.add_decal_mask(a)
+    return color, a, pdata
+
+
+def _paint_surface(ctx, bsdf, a, pdata, rough):
+    """BodySurfaceOverride: roughness -> paint data B, metallic = data A, by s = a * override. The paint
+    normal (data RG) isn't blended in yet. Returns the roughness."""
+    p, nb = ctx.p, ctx.nb
+    if a is None or pdata is None:
+        return rough
+    so = p.s("BodySurfaceOverride", 0.0)
+    if so:
+        s = nb.mul(a, so)
+        _r, _g, b = nb.separate(pdata.outputs["Color"], label="Paint data")
+        rough = nb.math("ADD", nb.lerp(rough, b, s), 0.0, clamp=True)
+        nb.feed(bsdf.inputs["Metallic"], nb.mul(pdata.outputs["Alpha"], s, clamp=True))
+    return rough
+
+
+def _uv_select(ctx, index):
+    """The UV channel M_Skin's BodyPaintUV / TattooUV picks (0, 1, 2; missing channels fall back to 0)."""
+    i = int(round(max(0.0, min(2.0, index))))
+    return ctx.uv_channel(i) or ctx.uv()

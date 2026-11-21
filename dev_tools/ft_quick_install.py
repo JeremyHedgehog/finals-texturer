@@ -2,7 +2,8 @@
 
 Install this file once (Edit > Preferences > Add-ons > Install from Disk… > this .py). Then the
 3D view sidebar tab "FT Dev" (or F3 > "Install Latest Finals Texturer") installs the newest
-finals_texturer-<version>.zip from FOLDER over the installed one and re-enables it, in one click.
+finals_texturer-<version>.zip from your project folder (set it in this add-on's preferences, or the
+FT_REPO environment variable) over the installed one and re-enables it, in one click.
 """
 
 bl_info = {
@@ -23,7 +24,23 @@ import sys
 import addon_utils
 import bpy
 
-FOLDER = r"D:\BlenderStuff\TheFinals\finals-texturer"
+def folder():
+    """Folder with the built finals_texturer-<version>.zip: the preference, else FT_REPO, else the repository
+    this file lives in (when run from a checkout)."""
+    addon = bpy.context.preferences.addons.get(__name__)
+    pref = getattr(getattr(addon, "preferences", None), "project_folder", "")
+    return bpy.path.abspath(pref) if pref else (os.environ.get("FT_REPO") or
+                                               os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+class FTDEV_Preferences(bpy.types.AddonPreferences):
+    bl_idname = __name__
+    project_folder: bpy.props.StringProperty(
+        name="Project folder", subtype="DIR_PATH",
+        description="Your finals-texturer checkout, where the build puts finals_texturer-<version>.zip")
+
+    def draw(self, context):
+        self.layout.prop(self, "project_folder")
 
 
 def _version(path):
@@ -32,7 +49,7 @@ def _version(path):
 
 
 def newest_zip():
-    zips = glob.glob(os.path.join(FOLDER, "finals_texturer-*.zip"))
+    zips = glob.glob(os.path.join(folder(), "finals_texturer-*.zip"))
     return max(zips, key=_version) if zips else ""
 
 
@@ -90,7 +107,7 @@ class FTDEV_OT_install_latest(bpy.types.Operator):
     def execute(self, context):
         zp = newest_zip()
         if not zp:
-            self.report({"ERROR"}, f"No finals_texturer-*.zip in {FOLDER}")
+            self.report({"ERROR"}, f"No finals_texturer-*.zip in {folder()} (set the project folder in this add-on's preferences)")
             return {"CANCELLED"}
         mod = installed_module()
         repo = mod.split(".")[1] if mod.startswith("bl_ext.") else "user_default"
@@ -134,7 +151,7 @@ class FTDEV_PT_panel(bpy.types.Panel):
         lay.operator(FTDEV_OT_install_latest.bl_idname, icon="IMPORT")
 
 
-CLASSES = (FTDEV_OT_install_latest, FTDEV_PT_panel)
+CLASSES = (FTDEV_Preferences, FTDEV_OT_install_latest, FTDEV_PT_panel)
 
 
 def register():

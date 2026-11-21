@@ -56,7 +56,10 @@ elif ITEM:
     choice = skins.get(SKEY, SKEY)
     objs = importer.import_psk(mesh_path, log)
     for m in [o for o in objs if o.type == "MESH"]:
-        importer.apply_to_object(m, EXP, choice, log)
+        # FT_SLOT_OVERRIDE="0=/Game/…/MI_X.MI_X;…": put a material on a slot (checks a body-cosmetic MI's
+        # formula on the body / head mesh with the same parameters on both sides)
+        so = {int(k): v for k, v in (x.split("=", 1) for x in os.environ.get("FT_SLOT_OVERRIDE", "").split(";") if "=" in x)}
+        importer.apply_to_object(m, EXP, choice, log, slot_overrides=so or None)
 else:
     weapons._ctx["root"] = lambda c: EXP
     w = next(x for x in weapons.weapons(EXP) if x["folder"] == WKEY)

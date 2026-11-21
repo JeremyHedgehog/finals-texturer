@@ -1,6 +1,6 @@
 """Read-only survey of FModel exports: types, master shaders, skins."""
 import json, os, re, sys, pickle, collections, time
-ROOT = r"D:\BlenderStuff\Fmodel\Output\Exports"
+ROOT = os.environ.get("FT_EXPORTS") or sys.exit("Set FT_EXPORTS to your FModel Output/Exports folder (see docs/TESTING.md)")
 OUT = sys.argv[1]
 t0 = time.time()
 TYPE_RE = re.compile(rb'"Type"\s*:\s*"([^"]+)"')

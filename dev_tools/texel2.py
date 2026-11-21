@@ -1,5 +1,5 @@
-import bpy, sys, importlib, bmesh, math
-sys.path.insert(0, r"C:/Users/bisch/Desktop/New folder")
+import bpy, sys, importlib, bmesh, math, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 importlib.import_module("add-on-io-scene-psk-psa-v9_1_2").register()
 for f in sys.argv[sys.argv.index("--") + 1:]:
     for o in list(bpy.data.objects):
