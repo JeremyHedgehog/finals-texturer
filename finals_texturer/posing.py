@@ -313,6 +313,9 @@ def _apply_arp(rig, body, D):
 def apply(body, pose_file, game_path="", weapon_id="", rig=None):
     """Pose the body with a .psa (through its ARP controls when a rig drives it); game_path is
     remembered on the body. Returns the pose data."""
+    from . import first_person, twist
+    if first_person.is_posed(body):                 # its constraints would override this pose
+        first_person.leave(body)
     pose = read_pose(pose_file)
     k = body_scale(body, pose)
     D = deltas(pose, k)
@@ -323,6 +326,8 @@ def apply(body, pose_file, game_path="", weapon_id="", rig=None):
         _apply_plain(body, D)
     body[POSE_PROP] = game_path or pose_file
     body[WEAPON_PROP] = weapon_id
+    twist.add_forearm_twist(bpy.context, body)      # rolled wrists don't pinch (Simplify merged the game's)
+    bpy.context.view_layer.update()
     return pose
 
 
@@ -368,6 +373,57 @@ def attached_weapons(body):
     return out
 
 
+SECOND_GUN = "weapon_mag"      # dual weapons (.50 Akimbo): the left gun hangs on the weapon's weapon_mag
+LEFT_HAND = "hand_l"           # bone, which the game's poses put in the left hand
+SECOND_GUN_CONSTRAINT = "FT Left hand"
+
+
+def is_dual(obj):
+    """Two guns: the second one's bones (weapon_slide2...) or, on skins like Akimbanana, a separate part
+    hung on weapon_mag."""
+    if obj.type != "ARMATURE" or obj.data.bones.get(SECOND_GUN) is None:
+        return False
+    return any(obj.data.bones.get(b) for b in ("weapon_slide2", "weapon_trigger2")) or         any(c.parent_type == "BONE" and c.parent_bone == SECOND_GUN for c in obj.children)
+
+
+def _free_second_gun(obj):
+    pb = obj.pose.bones.get(SECOND_GUN) if obj.type == "ARMATURE" else None
+    if pb is None:
+        return None
+    for c in [c for c in pb.constraints if c.name == SECOND_GUN_CONSTRAINT]:
+        pb.constraints.remove(c)
+    pb.matrix_basis = Matrix.Identity(4)
+    return pb
+
+
+def attach_second_gun(body, obj, pose):
+    """Put a dual weapon's left gun where the pose holds it and make it follow the left hand."""
+    pb = _free_second_gun(obj)
+    if pb is None or "weapon_root" not in pose or SECOND_GUN not in pose or LEFT_HAND not in body.pose.bones:
+        return False
+    bpy.context.view_layer.update()
+    g_root, g_rest_root = pose["weapon_root"]
+    g_mag, g_rest_mag = pose[SECOND_GUN]
+    rel = g_root.inverted() @ g_mag                        # left gun relative to the right one, game cm
+    root_b = obj.data.bones.get("weapon_root")
+    r_root = root_b.matrix_local if root_b else Matrix.Identity(4)
+    # the weapon's units per game cm, from the rest offset weapon_root -> weapon_mag in both skeletons
+    game_len = (g_rest_root.inverted() @ g_rest_mag).translation.length
+    own_len = (r_root.inverted() @ pb.bone.matrix_local).translation.length
+    rel.translation = rel.translation * (own_len / game_len if game_len > 1e-6 and own_len > 1e-6 else 1.0)
+    pb.matrix = r_root @ rel
+    bpy.context.view_layer.update()
+    c = pb.constraints.new("CHILD_OF")
+    c.name = SECOND_GUN_CONSTRAINT
+    c.target, c.subtarget = body, LEFT_HAND
+    if hasattr(c, "set_inverse_pending"):
+        c.set_inverse_pending = False                      # keep our inverse (new Child Of sets its own)
+    # a bone's Child Of works on the bone's armature-space matrix: undo the hand, redo the weapon object
+    c.inverse_matrix = (body.matrix_world @ body.pose.bones[LEFT_HAND].matrix).inverted() @ obj.matrix_world
+    bpy.context.view_layer.update()
+    return True
+
+
 def attach(body, objs, pose):
     """Put a weapon's top objects where the pose holds it and parent them to the right hand."""
     world = weapon_world(body, pose)
@@ -382,11 +438,16 @@ def attach(body, objs, pose):
         bpy.context.view_layer.update()
         o.matrix_world = world
     bpy.context.view_layer.update()
+    for o in objs:
+        if is_dual(o):
+            attach_second_gun(body, o, pose)
     return True
 
 
 def detach(objs):
     for o in objs:
+        if is_dual(o):
+            _free_second_gun(o)
         mw = o.matrix_world.copy()
         o.parent = None
         o.matrix_world = mw
